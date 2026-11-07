@@ -3,11 +3,11 @@
 Локальные даты и время остаются прежними, меняются только моменты в UTC.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 
 from aiosqlite import Connection
 
-from bot.repo import countdowns, habits, settings, tasks
+from bot.repo import countdowns, habits, payments, settings, tasks
 
 
 async def reschedule_all(db: Connection, user_id: int, now: datetime) -> None:
@@ -22,6 +22,10 @@ async def reschedule_all(db: Connection, user_id: int, now: datetime) -> None:
         await countdowns.set_next_run(db, countdown["id"], countdowns.next_run(countdown["send_time"], tz, now))
     for habit in await habits.list_active(db, user_id):
         await habits.set_next_run(db, habit["id"], habits.next_run(habit["remind_time"], habit["days_mask"], tz, now))
+    for payment in await payments.list_all(db, user_id):
+        if payment["next_run_at"] is not None:
+            due = date.fromisoformat(payment["due_date"])
+            await payments.set_next_run(db, payment["id"], payments.remind_at(due, tz))
     for task in await tasks.open_dated(db, user_id):
         offsets = await tasks.offsets(db, task["id"])
         await tasks.rebuild_reminders(db, task["id"], task["due_date"], task["due_time"], offsets, tz, now)

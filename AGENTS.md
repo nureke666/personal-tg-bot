@@ -117,6 +117,8 @@ uv run ruff check . && uv run ruff format --check . && uv run pytest
 | Обработчики по разделам / тексты и клавиатуры экранов / SQL | `bot/handlers/`, `bot/views/`, `bot/repo/` |
 | Данные кнопок | `bot/callbacks.py` |
 | Состояние мастеров (FSM) в SQLite | `bot/storage.py:SQLiteStorage` |
+| Счета, переводы, баланс | `bot/repo/finance.py:account_balances` |
+| Регулярные платежи | `bot/repo/payments.py`, `bot/handlers/payments.py` |
 | Время: UTC в базе, локальное на экране, повторы | `bot/services/timeutil.py` |
 | Быстрый ввод «1500 такси» | `bot/services/quick.py`, `bot/handlers/quick.py` |
 | Сквозные тесты через настоящий Dispatcher | `tests/conftest.py:Harness` |

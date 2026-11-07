@@ -14,12 +14,13 @@ from aiogram.exceptions import TelegramAPIError, TelegramNetworkError, TelegramR
 from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, Message
 from aiosqlite import Connection
 
-from bot.repo import countdowns, habits, settings, tasks
+from bot.repo import countdowns, habits, payments, settings, tasks
 from bot.services import backup, morning, summary
 from bot.services import timeutil as tu
 from bot.services.texts import clip, esc
 from bot.views import countdowns as countdown_views
 from bot.views import habits as habit_views
+from bot.views import payments as payment_views
 from bot.views import summary as summary_views
 from bot.views import tasks as task_views
 
@@ -147,6 +148,7 @@ async def tick(bot: Bot, db: Connection, now: datetime, owner_id: int | None) ->
     await task_reminders(out, db, now)
     await countdown_messages(out, db, now)
     await habit_reminders(out, db, now)
+    await payment_reminders(out, db, now)
     await morning_lists(out, db, now)
     await digests(out, db, now)
     await checkins(out, db, now)
@@ -229,6 +231,15 @@ async def morning_lists(out: Outbox, db: Connection, now: datetime) -> None:
             # Нечего делать сегодня — вчерашний список всё равно снимаем, чтобы не висел.
             await morning.replace_pin(out.bot, db, user, message.message_id if message else None, today)
         await settings.update(db, uid, morning_next_at=settings.next_at("morning", user["morning_time"], tz, now))
+
+
+async def payment_reminders(out: Outbox, db: Connection, now: datetime) -> None:
+    for row in await payments.due(db, now):
+        text, markup = payment_views.reminder(row, tu.local_today(row["tz"], now))
+        if not await out.send(row["user_id"], text, markup):
+            continue
+        # Без ответа напоминаем завтра в это же время, пока не нажмёт «Оплачено» или «Пропустить».
+        await payments.set_next_run(db, row["id"], tu.to_db(tu.next_daily_run(payments.REMIND_AT, row["tz"], now)))
 
 
 async def digests(out: Outbox, db: Connection, now: datetime) -> None:
