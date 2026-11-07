@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   check:
@@ -18,3 +19,37 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run pytest
+
+  # Прод: после зелёных проверок на main копируем код на VPS и пересобираем контейнер.
+  # .env и data/ на сервере не трогаются. Секреты — в README, раздел «Автодеплой».
+  deploy:
+    needs: check
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    concurrency: deploy
+    env:
+      TARGET: ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}
+      DIR: ${{ secrets.VPS_PATH }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Ключ SSH
+        env:
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          case "$DIR" in /?*) ;; *) echo "VPS_PATH должен быть абсолютным путём к папке бота" >&2; exit 1;; esac
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          echo "SSH=ssh -i $HOME/.ssh/id_deploy -o BatchMode=yes" >> "$GITHUB_ENV"
+      - name: Папка бота на сервере на месте
+        run: $SSH "$TARGET" "test -f '$DIR/docker-compose.yml'"
+      - name: Копирование кода
+        run: |
+          rsync -az --delete -e "$SSH" \
+            --exclude .git/ --exclude .env --exclude data/ --exclude .venv/ \
+            --exclude docker-compose.override.yml \
+            ./ "$TARGET:$DIR/"
+      - name: Перезапуск
+        run: $SSH "$TARGET" "cd '$DIR' && docker compose up -d --build && sleep 5 && docker compose ps && docker compose logs --tail 20"
