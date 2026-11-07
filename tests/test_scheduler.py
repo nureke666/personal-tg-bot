@@ -244,7 +244,9 @@ async def test_finance_totals_and_balance(db, user):
 
     assert await finance.totals(db, OWNER, date(2026, 10, 1), date(2026, 10, 31)) == (50_000_000, 150_000)
     assert await finance.spent(db, OWNER, date(2026, 10, 1), date(2026, 10, 31), food["id"]) == 150_000
-    assert await finance.balance(db, OWNER, start_balance=1_000_000) == 1_000_000 + 50_000_000 - 450_000
+    card = (await finance.accounts(db, OWNER))[0]
+    await finance.set_account_start(db, card["id"], 1_000_000)
+    assert await finance.balance(db, OWNER) == 1_000_000 + 50_000_000 - 450_000
     by_cat = await finance.by_category(db, OWNER, finance.EXPENSE, None, None)
     assert [(r["name"], r["total"]) for r in by_cat] == [(food["name"], 450_000)]
 
@@ -587,3 +589,25 @@ async def test_short_failure_does_not_report_recovery(db, user, fake_bot, monkey
     monkeypatch.undo()
     await scheduler.guarded_tick(fake_bot, db, NOW + timedelta(minutes=1), OWNER, watchdog)
     assert fake_bot.sent == []
+
+
+async def test_migration_moves_start_balance_into_card_account():
+    conn = await aiosqlite.connect(":memory:", isolation_level=None)
+    conn.row_factory = aiosqlite.Row
+    try:
+        for number, script in enumerate(database.MIGRATIONS[:11], start=1):
+            await conn.executescript(f"BEGIN; {script}; PRAGMA user_version = {number}; COMMIT;")
+        await conn.execute("INSERT INTO settings (user_id, tz, start_balance) VALUES (1, 'Asia/Almaty', 500000)")
+        await conn.execute("INSERT INTO categories (id, user_id, kind, name) VALUES (5, 1, 'expense', 'Еда')")
+        await conn.execute(
+            "INSERT INTO transactions (user_id, kind, amount, category_id, op_date, created_at)"
+            " VALUES (1, 'expense', 100, 5, '2026-01-01', '2026-01-01 00:00:00')"
+        )
+        await database.migrate(conn)
+        accounts = await conn.execute_fetchall("SELECT id, name, start_balance FROM accounts ORDER BY id")
+        assert [(r["name"], r["start_balance"]) for r in accounts] == [("💳 Карта", 500000), ("💵 Наличные", 0)]
+        card = accounts[0]["id"]
+        assert await database.scalar(conn, "SELECT default_account_id FROM settings") == card
+        assert await database.scalar(conn, "SELECT account_id FROM transactions") == card
+    finally:
+        await conn.close()

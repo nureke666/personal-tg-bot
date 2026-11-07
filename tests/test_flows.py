@@ -6,6 +6,7 @@ from aiogram.methods import EditMessageText, PinChatMessage, UnpinChatMessage
 from aiogram.types import Chat, Message, Update, User
 
 from bot.callbacks import (
+    AccCb,
     CalCb,
     CatCb,
     CountdownCb,
@@ -346,9 +347,47 @@ async def test_settings_timezone_and_schedule(db, harness, user):
     await harness.click(TimeCb(action="pick", kind="p", h=22, m=15))
     assert (await settings.get(db, OWNER))["checkin_time"] == "22:15"
 
-    await harness.click(SetCb(act="balance"))
-    await harness.send("-5000")
-    assert (await settings.get(db, OWNER))["start_balance"] == -500_000
+
+async def test_accounts_balances_transfer_and_default(db, harness, user):
+    card, cash = await finance.accounts(db, OWNER)
+    assert user["default_account_id"] == card["id"]
+    await harness.click(AccCb(act="start", id=card["id"]))
+    await harness.send("100000")
+    assert (await finance.account(db, OWNER, card["id"]))["start_balance"] == 10_000_000
+
+    await harness.click(FinCb(act="add", v="expense"))
+    await harness.send("1500")
+    await harness.click(harness.button("Еда"))
+    await harness.click(NavCb(action="skip"))
+    assert "✅ Записал" in harness.text and "💳 Карта" in harness.text  # основной счёт
+
+    await harness.click(AccCb(act="transfer"))
+    await harness.click(AccCb(act="tfrom", id=card["id"]))
+    await harness.click(AccCb(act="tto", id=cash["id"], v=str(card["id"])))
+    await harness.send("20000")
+    assert "✅ 🔁 Перевод" in harness.text
+    balances = await finance.account_balances(db, OWNER)
+    assert balances == {card["id"]: 10_000_000 - 150_000 - 2_000_000, cash["id"]: 2_000_000}
+    assert await finance.balance(db, OWNER) == 10_000_000 - 150_000  # перевод общую сумму не меняет
+    assert await finance.totals(db, OWNER, None, None) == (0, 150_000)  # и в доходы/расходы не попадает
+
+    await harness.click(AccCb(act="archive", id=card["id"]))
+    assert harness.toasts[-1] == "Основной счёт скрыть нельзя"
+    await harness.click(AccCb(act="default", id=cash["id"]))
+    assert (await settings.get(db, OWNER))["default_account_id"] == cash["id"]
+    await harness.send("700 кофе")
+    await harness.click(harness.button("Еда"))
+    [op] = [o for o in await finance.recent_ops(db, OWNER, 0, 10) if o["comment"] == "кофе"]
+    assert op["account"] == "💵 Наличные"
+
+    await harness.click(OpCb(act="setacc", id=op["id"], v=str(card["id"])))
+    assert "👛 Счёт изменён" in harness.text and (await finance.op(db, OWNER, op["id"]))["account_id"] == card["id"]
+
+    await harness.click(AccCb(act="new"))
+    await harness.send("🏦 Депозит")
+    assert "🏦 Депозит" in harness.text and len(await finance.accounts(db, OWNER)) == 3
+    await harness.click(FinCb(act="menu"))
+    assert "🏦 Депозит" in harness.text and "💵 Наличные" in harness.text
 
 
 async def test_backup_from_settings(db, harness, user):
