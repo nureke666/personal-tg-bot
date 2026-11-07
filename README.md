@@ -74,7 +74,9 @@ docker compose logs -f                        # должно быть «Бот @
 ### Автодеплой
 
 После каждого влитого в `main` PR GitHub Actions прогоняет проверки, копирует код в папку бота на VPS
-(`.env` и `data/` не трогает) и делает `docker compose up -d --build`. Вручную — Actions → CI → Run workflow.
+(`.env`, `data/` и другие свои файлы не трогает), делает копию базы `data/before-deploy.db` и
+`docker compose up -d --build`, затем ждёт в логах «Бот … запущен» — иначе прогон красный. Вручную —
+Actions → CI → Run workflow.
 
 Один раз настроить (папка бота на сервере с `docker-compose.yml` и `.env` уже должна быть):
 
