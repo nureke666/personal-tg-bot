@@ -1,4 +1,8 @@
-"""Быстрый ввод: текст вне мастеров. С суммой — операция, без суммы — предлагаем сделать задачей."""
+"""Быстрый ввод: текст вне мастеров.
+
+С датой или временем («завтра в 10 позвонить маме») — сразу задача, с суммой — операция,
+остальное — предлагаем сделать задачей.
+"""
 
 from datetime import timedelta
 
@@ -16,7 +20,7 @@ from bot.handlers.ui import show
 from bot.repo import finance as finance_repo
 from bot.repo import journal
 from bot.repo import tasks as tasks_repo
-from bot.services import quick
+from bot.services import quick, smart_task
 from bot.services import timeutil as tu
 from bot.services.texts import quote
 from bot.views import tasks as task_views
@@ -27,6 +31,10 @@ router = Router(name="quick")
 @router.message(StateFilter(None), F.text, ~F.text.startswith("/"))
 async def quick_text(message: Message, state: FSMContext, db: Connection, settings: Row) -> None:
     text, uid, mid = message.text.strip(), settings["user_id"], message.message_id
+    if guess := smart_task.parse(text, tu.local_now(settings["tz"])):
+        await state.clear()
+        await save_guessed_task(message, db, settings, guess)
+        return
     await state.set_data({"quick_text": text, "quick_mid": mid})
     op = quick.parse_op(text)
     if op is None:
@@ -80,3 +88,16 @@ async def quick_action(
     task_id = await tasks_repo.create(db, settings["user_id"], draft, settings["tz"], tu.utcnow())
     await journal.add(db, settings["user_id"], f"📋 Новая задача {quote(draft['title'])}")
     await tasks.show_card(callback, db, settings, task_id, "✅ Задача сохранена")
+
+
+async def save_guessed_task(message: Message, db: Connection, settings: Row, guess: smart_task.TaskGuess) -> None:
+    draft = {
+        "title": guess.title[:200],
+        "due_date": guess.due_date.isoformat(),
+        "due_time": tu.fmt_hm(guess.due_time) if guess.due_time else None,
+        "repeat": guess.repeat,
+        "offsets": [0],
+    }
+    task_id = await tasks_repo.create(db, settings["user_id"], draft, settings["tz"], tu.utcnow())
+    await journal.add(db, settings["user_id"], f"📋 Новая задача {quote(draft['title'])}")
+    await tasks.show_card(message, db, settings, task_id, "✅ Задача сохранена — понял из текста, поправь, если не так")
