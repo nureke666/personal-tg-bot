@@ -82,6 +82,22 @@ async def test_create_task_wizard(db, harness):
     assert await tasks.pending_reminders(db, task["id"]) == 2
 
 
+async def test_wizard_survives_restart(db, make_harness):
+    before = make_harness()
+    await before.click(TaskListCb(view="new"))
+    await before.send("Купить хлеб")
+    await before.close()  # бот перезапустили посреди мастера
+
+    after = make_harness()
+    await after.click(NavCb(action="skip"))
+    await after.click(DateQuickCb(v="none"))
+    await after.click(NavCb(action="save"))
+    assert "Задача сохранена" in after.text
+    [task] = await _all_tasks(db)
+    assert task["title"] == "Купить хлеб"
+    assert await db.execute_fetchall("SELECT * FROM fsm") == []  # закончил мастер — строка убрана
+
+
 async def test_task_without_date_skips_time_and_reminders(db, harness):
     await harness.click(TaskListCb(view="new"))
     await harness.send("Прочитать книгу")

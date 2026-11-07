@@ -7,7 +7,6 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramAPIError, TelegramUnauthorizedError
-from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, BotCommandScopeChat
 from aiogram.utils.callback_answer import CallbackAnswerMiddleware
 from aiogram.utils.token import TokenValidationError
@@ -31,6 +30,7 @@ from bot.handlers import (
 )
 from bot.middlewares.owner import OwnerMiddleware
 from bot.services import scheduler
+from bot.storage import SQLiteStorage
 
 log = logging.getLogger("bot")
 
@@ -43,7 +43,7 @@ COMMANDS = [
 
 def build_dispatcher(db: Connection, config: Config) -> Dispatcher:
     # db и config попадают в хендлеры как одноимённые аргументы.
-    dp = Dispatcher(storage=MemoryStorage(), db=db, config=config)
+    dp = Dispatcher(storage=SQLiteStorage(db), db=db, config=config)
     dp.update.outer_middleware(OwnerMiddleware(db, config.owner_id, config.default_tz))
     dp.callback_query.middleware(CallbackAnswerMiddleware())
     # Порядок важен: меню перехватывает свои кнопки в любом состоянии, quick — текст вне мастеров,

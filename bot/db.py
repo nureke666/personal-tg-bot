@@ -201,6 +201,14 @@ MIGRATIONS = [
     DROP TABLE allowed_users;
     DROP TABLE access_requests;
     """,
+    # Состояние мастеров (bot/storage.py): переживает перезапуск. data — JSON.
+    """
+    CREATE TABLE fsm (
+        key   TEXT PRIMARY KEY,
+        state TEXT,
+        data  TEXT NOT NULL DEFAULT '{}'
+    );
+    """,
 ]
 
 
