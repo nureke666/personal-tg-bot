@@ -5,7 +5,7 @@ from datetime import date, timedelta
 import aiosqlite
 
 from bot import db as database
-from bot.repo import countdowns, finance, habits, settings, tasks
+from bot.repo import countdowns, finance, habits, payments, settings, tasks
 from bot.services import scheduler
 from bot.services import timeutil as tu
 from bot.services.planning import reschedule_all
@@ -611,3 +611,26 @@ async def test_migration_moves_start_balance_into_card_account():
         assert await database.scalar(conn, "SELECT account_id FROM transactions") == card
     finally:
         await conn.close()
+
+
+async def test_payment_reminder_repeats_daily_until_answered(db, user, fake_bot):
+    food = (await finance.categories(db, OWNER, finance.EXPENSE))[0]
+    pid = await payments.create(db, OWNER, "📱 Связь", 500_000, food["id"], None, payments.MONTHLY, TODAY, TZ)
+    await scheduler.tick(fake_bot, db, NOW, OWNER)  # 08:00 — рано
+    assert fake_bot.sent == []
+    await scheduler.tick(fake_bot, db, NOW + timedelta(hours=2), OWNER)  # 10:00
+    [(chat_id, text, markup)] = fake_bot.sent
+    assert chat_id == OWNER and "📱 Связь" in text and "сегодня день оплаты" in text.lower()
+    assert "Оплачено" in str(markup)
+    await scheduler.tick(fake_bot, db, NOW + timedelta(hours=3), OWNER)
+    assert len(fake_bot.sent) == 1
+    await scheduler.tick(fake_bot, db, NOW + timedelta(days=1, hours=2), OWNER)  # назавтра снова
+    assert len(fake_bot.sent) == 2 and "Просрочен на 1 день" in fake_bot.sent[-1][1]
+    assert (await payments.get(db, OWNER, pid))["due_date"] == TODAY.isoformat()
+
+
+def test_monthly_payment_keeps_day_of_month():
+    assert payments.next_due(date(2027, 1, 31), payments.MONTHLY, 31) == date(2027, 2, 28)
+    assert payments.next_due(date(2027, 2, 28), payments.MONTHLY, 31) == date(2027, 3, 31)
+    assert payments.next_due(date(2026, 10, 17), payments.WEEKLY, None) == date(2026, 10, 24)
+    assert payments.next_due(date(2028, 2, 29), payments.YEARLY, None) == date(2029, 2, 28)

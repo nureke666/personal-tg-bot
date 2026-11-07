@@ -3,7 +3,7 @@ from datetime import date
 
 from aiogram.types import InlineKeyboardMarkup
 
-from bot.callbacks import AccCb, CatCb, FinCb, NavCb, OpCb, QuickCb
+from bot.callbacks import AccCb, CatCb, FinCb, NavCb, OpCb, PayCb, QuickCb
 from bot.keyboards.common import btn, chunks, kb, nav_row
 from bot.repo.finance import EXPENSE, INCOME
 from bot.services import reports
@@ -40,6 +40,7 @@ def finance_menu(
         [btn("➖ Расход", FinCb(act="add", v=EXPENSE)), btn("➕ Доход", FinCb(act="add", v=INCOME))],
         [btn("📊 Отчёт", FinCb(act="report", v="month")), btn("🧾 История", FinCb(act="history"))],
         [btn("👛 Счета", AccCb(act="list")), btn("🔁 Перевод", AccCb(act="transfer"))],
+        [btn("📅 Регулярные платежи", PayCb(act="list"))],
         [btn("🎯 Лимиты", FinCb(act="limits")), btn("🗂 Категории", FinCb(act="cats", v=EXPENSE))],
         [btn("📤 Выгрузка в Excel/CSV", FinCb(act="export"))],
     )

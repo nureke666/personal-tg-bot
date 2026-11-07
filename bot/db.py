@@ -237,6 +237,23 @@ MIGRATIONS = [
     UPDATE transactions
         SET account_id = (SELECT s.default_account_id FROM settings s WHERE s.user_id = transactions.user_id);
     """,
+    # Регулярные платежи (bot/repo/payments.py). due_date — ближайший неоплаченный, anchor_day — день месяца
+    # для ежемесячных (31-е в коротком месяце — последний день). next_run_at = NULL — не напоминать.
+    """
+    CREATE TABLE payments (
+        id          INTEGER PRIMARY KEY,
+        user_id     INTEGER NOT NULL,
+        title       TEXT    NOT NULL,
+        amount      INTEGER NOT NULL,
+        category_id INTEGER NOT NULL REFERENCES categories(id),
+        account_id  INTEGER REFERENCES accounts(id),
+        period      TEXT    NOT NULL,
+        anchor_day  INTEGER,
+        due_date    TEXT    NOT NULL,
+        next_run_at TEXT
+    );
+    CREATE INDEX ix_payments_due ON payments(next_run_at);
+    """,
 ]
 
 
