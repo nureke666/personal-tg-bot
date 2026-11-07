@@ -383,9 +383,26 @@ async def test_accounts_balances_transfer_and_default(db, harness, user):
     await harness.click(OpCb(act="setacc", id=op["id"], v=str(card["id"])))
     assert "👛 Счёт изменён" in harness.text and (await finance.op(db, OWNER, op["id"]))["account_id"] == card["id"]
 
+    await harness.click(AccCb(act="transfers"))
+    [transfer] = await finance.recent_transfers(db, OWNER)
+    await harness.click(AccCb(act="tdel", id=transfer["id"]))
+    await harness.click(AccCb(act="tdelok", id=transfer["id"]))
+    assert "Перевод удалён" in harness.text and await finance.recent_transfers(db, OWNER) == []
+    assert (await finance.account_balances(db, OWNER))[cash["id"]] == 0
+
+    await harness.click(AccCb(act="new"))
+    await harness.send("Kaspi <Gold>")
+    assert "Kaspi &lt;Gold&gt;" in harness.text  # имя экранируется
+    gold = (await finance.accounts(db, OWNER))[-1]
+    await harness.click(AccCb(act="transfer"))
+    await harness.click(AccCb(act="tfrom", id=card["id"]))
+    await harness.click(AccCb(act="tto", id=gold["id"], v=str(card["id"])))
+    await harness.send("100")
+    assert "Kaspi &lt;Gold&gt;" in harness.text and "<Gold>" not in harness.text
+
     await harness.click(AccCb(act="new"))
     await harness.send("🏦 Депозит")
-    assert "🏦 Депозит" in harness.text and len(await finance.accounts(db, OWNER)) == 3
+    assert "🏦 Депозит" in harness.text and len(await finance.accounts(db, OWNER)) == 4
     await harness.click(FinCb(act="menu"))
     assert "🏦 Депозит" in harness.text and "💵 Наличные" in harness.text
 

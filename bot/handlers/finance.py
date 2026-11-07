@@ -528,6 +528,29 @@ async def account_action(
             kb([btn("✖ Отмена", AccCb(act="list"))]),
         )
         return
+    if act == "transfers":
+        transfers = await repo.recent_transfers(db, uid)
+        await show(callback, *views.transfers_view(transfers, settings["currency"], _today(settings)))
+        return
+    if act in ("tdel", "tdelok"):
+        transfer = await repo.transfer(db, uid, callback_data.id)
+        if not transfer:
+            callback_answer.text = "Перевод уже удалён"
+            await show_accounts(callback, db, settings)
+            return
+        money = fmt_money(transfer["amount"], settings["currency"])
+        route = f"{clip(transfer['from_name'])} → {clip(transfer['to_name'])}"
+        if act == "tdel":
+            await show(
+                callback,
+                f"🗑 Удалить перевод {money}: {esc(route)}? Балансы счетов пересчитаются.",
+                confirm_kb(AccCb(act="tdelok", id=transfer["id"]), AccCb(act="transfers")),
+            )
+            return
+        await repo.delete_transfer(db, transfer["id"])
+        await journal.add(db, uid, f"🗑 Удалён перевод {money}: {route}")
+        await show_accounts(callback, db, settings, "🗑 Перевод удалён")
+        return
     if act == "transfer":
         accounts = await repo.accounts(db, uid)
         if len(accounts) < 2:
@@ -640,9 +663,10 @@ async def got_transfer_amount(message: Message, state: FSMContext, db: Connectio
         await show(message, "Счёт не найден.", BACK_TO_FINANCE)
         return
     await repo.add_transfer(db, uid, source["id"], target["id"], amount, _today(settings), tu.utcnow())
-    text = f"🔁 Перевод {fmt_money(amount, settings['currency'])}: {clip(source['name'])} → {clip(target['name'])}"
-    await journal.add(db, uid, text)
-    await show_accounts(message, db, settings, f"✅ {text}")
+    money = fmt_money(amount, settings["currency"])
+    await journal.add(db, uid, f"🔁 Перевод {money}: {clip(source['name'])} → {clip(target['name'])}")
+    header = f"✅ 🔁 Перевод {money}: {esc(clip(source['name']))} → {esc(clip(target['name']))}"
+    await show_accounts(message, db, settings, header)
 
 
 # --- выгрузка ---
