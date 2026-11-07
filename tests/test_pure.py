@@ -397,5 +397,32 @@ def test_smart_task_repeats():
 
 
 def test_smart_task_leaves_money_and_plain_text_alone():
-    for text in ("купить хлеб", "1500 такси", "такси 1500", "кофе 1.5", "позвонить 15", "завтра", "+250000 зарплата"):
+    for text in (
+        "купить хлеб",
+        "1500 такси",
+        "такси 1500",
+        "кофе 1.5",
+        "позвонить 15",
+        "завтра",
+        "+250000 зарплата",
+        "кофе 12.10",
+        "обед 25.10",
+        "сегодня такси 1500",
+        "продукты на завтра 5000",
+        "кино в пт 4000",
+        "обед 12:30 2500",
+        "подарок к 8 марта 5000",
+        "такси до 10:00 1500",
+        "ежемесячно интернет 5000",
+        "1500 по пт",
+    ):
         assert smart_task.parse(text, SUNDAY) is None, text
+
+
+def test_smart_task_past_and_impossible_dates():
+    assert smart_task.parse("сегодня в 9 позвонить", SUNDAY) is None  # 9:00 уже прошло
+    assert smart_task.parse("оплатить 01.01.25", SUNDAY) is None
+    assert smart_task.parse("29 февраля поздравить", datetime(2028, 3, 1, 10, 0)) is None  # 2029 не високосный
+    assert smart_task.parse("29.02 поздравить", datetime(2028, 3, 1, 10, 0)) is None
+    assert _guess("каждый день в 9 зарядка") == ("Зарядка", date(2026, 11, 9), time(9, 0), "daily")
+    assert _guess("на 12.11 записаться к врачу") == ("Записаться к врачу", date(2026, 11, 12), None, "none")
