@@ -44,7 +44,7 @@ uv run ruff check . && uv run ruff format --check . && uv run pytest
 | Инвариант | Где держится |
 | --------- | ------------ |
 | Бот отвечает только владельцу (`OWNER_ID`); без `OWNER_ID` только подсказывает id | `bot/middlewares/owner.py:OwnerMiddleware`; тесты `test_stranger_is_ignored`, `test_without_owner_bot_tells_user_id` |
-| Планировщик пишет только владельцу; чужие события не копятся | `bot/services/scheduler.py:Outbox`; тесты `test_scheduler_sends_nothing_from_other_users_data`, `test_scheduler_without_owner_sends_nothing` |
+| Планировщик пишет только владельцу, чужие события не копятся; без `OWNER_ID` ничего не трогает | `bot/services/scheduler.py:Outbox`; тесты `test_scheduler_sends_nothing_from_other_users_data`, `test_scheduler_without_owner_waits_for_it` |
 | Напоминание приходит ровно один раз, после простоя — одно, с пометкой «с опозданием» | `bot/services/scheduler.py:task_reminders`; тесты `test_reminder_is_sent_exactly_once`, `test_after_downtime_one_late_reminder` |
 | «Сделано» на напоминании прошлого раза не отмечает новый раз повторяющейся задачи | `bot/handlers/tasks.py:reminder_action`; тест `test_snooze_and_stale_occurrence` |
 | Повтор не уезжает в прошлое, месячный держит день месяца | `bot/services/timeutil.py:advance_repeat`; тесты `test_advance_repeat_never_lands_in_the_past`, `test_monthly_repeat_keeps_anchor_day_after_short_month` |

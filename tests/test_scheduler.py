@@ -388,19 +388,27 @@ async def test_scheduler_sends_nothing_from_other_users_data(db, user, fake_bot)
     # Чужие данные в базе (например, после смены OWNER_ID): бот им не пишет и ничего не копит.
     guest = 2002
     await settings.ensure(db, guest, TZ, NOW)
+    await settings.update(db, guest, morning_msg_id=555, morning_msg_day="2026-10-17")
     await habits.create(db, guest, "💧 Вода", tu.ALL_DAYS, None, TZ, NOW)
     task_id = await tasks.create(
         db, guest, {"title": "Его дело", "due_date": "2026-10-17", "due_time": "10:00", "offsets": [0]}, TZ, NOW
     )
     await scheduler.tick(fake_bot, db, NOW + timedelta(hours=22), OWNER)  # 06:00
     assert all(chat_id != guest for chat_id, _, _ in fake_bot.sent) and fake_bot.pinned == []
+    assert all(chat_id != guest for chat_id, _ in fake_bot.unpinned)
     assert await tasks.pending_reminders(db, task_id) == 0
 
 
-async def test_scheduler_without_owner_sends_nothing(db, user, fake_bot):
-    await _task(db)
+async def test_scheduler_without_owner_waits_for_it(db, user, fake_bot):
+    task_id = await _task(db)
+    await habits.create(db, OWNER, "💧 Вода", tu.ALL_DAYS, None, TZ, NOW)
+    await settings.update(db, OWNER, morning_msg_id=555, morning_msg_day="2026-10-17")
     await scheduler.tick(fake_bot, db, NOW + timedelta(days=1), None)
-    assert fake_bot.sent == [] and fake_bot.documents == []
+    assert fake_bot.sent == [] and fake_bot.documents == [] and fake_bot.unpinned == []
+    assert await tasks.pending_reminders(db, task_id) == 1  # ничего не помечено отправленным
+
+    await scheduler.tick(fake_bot, db, NOW + timedelta(days=1), OWNER)  # OWNER_ID вписали
+    assert any("Купить хлеб" in text and "опозданием" in text for _, text, _ in fake_bot.sent)
 
 
 async def test_migration_drops_access_tables(db):
@@ -473,6 +481,36 @@ async def test_migration_deletes_former_guests_data():
         assert all(users == {1} for users in (await _owners_by_table(conn)).values())
         assert await database.scalar(conn, "SELECT count(*) FROM task_reminders") == 1
         assert await database.scalar(conn, "SELECT count(*) FROM habit_marks") == 1
+    finally:
+        await conn.close()
+
+
+async def test_migration_deletes_data_of_revoked_guests():
+    # Гостю закрыли доступ (/deny): его нет в списке, а данные остались — их тоже удаляем.
+    conn = await _base_before_owner_only([(1, 1)])
+    try:
+        await database.migrate(conn)
+        assert all(users == {1} for users in (await _owners_by_table(conn)).values())
+    finally:
+        await conn.close()
+
+
+async def test_migration_keeps_owner_data_without_settings_row():
+    conn = await _base_before_owner_only([(1, 1), (2, 0)])
+    try:
+        await conn.execute("DELETE FROM settings WHERE user_id = 1")
+        await database.migrate(conn)
+        owners = await _owners_by_table(conn)
+        assert owners.pop("settings") == set() and all(users == {1} for users in owners.values())
+    finally:
+        await conn.close()
+
+
+async def test_migration_keeps_everything_when_only_guests_listed():
+    conn = await _base_before_owner_only([(2, 0)])
+    try:
+        await database.migrate(conn)
+        assert all(users == {1, 2} for users in (await _owners_by_table(conn)).values())
     finally:
         await conn.close()
 

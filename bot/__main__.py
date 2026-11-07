@@ -6,9 +6,9 @@ import sys
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.exceptions import TelegramUnauthorizedError
+from aiogram.exceptions import TelegramAPIError, TelegramUnauthorizedError
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import BotCommand
+from aiogram.types import BotCommand, BotCommandScopeChat
 from aiogram.utils.callback_answer import CallbackAnswerMiddleware
 from aiogram.utils.token import TokenValidationError
 from aiosqlite import Connection
@@ -90,6 +90,10 @@ async def main() -> int:
     if config.owner_id is None:
         log.warning("OWNER_ID не задан: напиши боту /start, он пришлёт твой id")
     await bot.set_my_commands(COMMANDS)
+    if config.owner_id is not None:
+        # Прежняя версия ставила владельцу /users, /allow, /deny отдельным списком — убираем его.
+        with contextlib.suppress(TelegramAPIError):
+            await bot.delete_my_commands(scope=BotCommandScopeChat(chat_id=config.owner_id))
 
     ticker = asyncio.create_task(scheduler.run(bot, db, config.tick_seconds, config.owner_id))
     try:

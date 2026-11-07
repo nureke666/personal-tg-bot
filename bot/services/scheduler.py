@@ -41,7 +41,7 @@ class Outbox:
     """Отправка из планировщика. Шлём только владельцу; чужие события (например, после смены OWNER_ID)
     считаем обработанными, чтобы они не копились."""
 
-    def __init__(self, bot: Bot, owner_id: int | None) -> None:
+    def __init__(self, bot: Bot, owner_id: int) -> None:
         self.bot = bot
         self.owner_id = owner_id
 
@@ -85,6 +85,9 @@ class Outbox:
 
 
 async def tick(bot: Bot, db: Connection, now: datetime, owner_id: int | None) -> None:
+    if owner_id is None:
+        # Владелец не настроен: ничего не трогаем, события дождутся OWNER_ID и придут с опозданием.
+        return
     out = Outbox(bot, owner_id)
     await roll_recurring(db, now)
     await task_reminders(out, db, now)
@@ -161,7 +164,8 @@ async def morning_lists(out: Outbox, db: Connection, now: datetime) -> None:
     for user in await settings.due_mornings(db, now):
         uid, tz = user["user_id"], user["tz"]
         # morning_next_at = NULL бывает сразу после обновления: только планируем, без внепланового списка.
-        if user["morning_next_at"] is not None:
+        # Чужой закреп (например, после смены OWNER_ID) не трогаем, только переносим расписание.
+        if user["morning_next_at"] is not None and uid == out.owner_id:
             today = tu.local_today(tz, now)
             message = None
             if await habits.planned(db, uid, today):
@@ -213,8 +217,6 @@ async def weekly_summaries(out: Outbox, db: Connection, now: datetime) -> None:
 
 
 async def backups(out: Outbox, db: Connection, now: datetime) -> None:
-    if out.owner_id is None:
-        return
     owner = await settings.due_backup(db, out.owner_id, now)
     if not owner:
         return
