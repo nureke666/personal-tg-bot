@@ -635,3 +635,14 @@ async def test_regular_payment_wizard_paid_and_skip(db, harness, user):
 
     await harness.click(PayCb(act="skip", id=payment["id"], d=tu.pack_day(date.fromisoformat(after))))
     assert "пропущен" in harness.text and await finance.count_ops(db, OWNER) == 1
+
+
+async def test_double_tap_on_paid_records_once(db, harness, user):
+    import asyncio
+
+    housing = next(c for c in await finance.categories(db, OWNER, "expense") if "Жильё" in c["name"])
+    pid = await payments.create(db, OWNER, "🏠 Аренда", 15_000_000, housing["id"], None, "monthly", today(), TZ)
+    button = PayCb(act="paid", id=pid, d=tu.pack_day(today()))
+    await asyncio.gather(harness.click(button), harness.click(button))  # нажал дважды, пока не было ответа
+    assert await finance.count_ops(db, OWNER) == 1
+    assert "Этот платёж уже отмечен" in harness.toasts

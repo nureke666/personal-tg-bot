@@ -634,3 +634,26 @@ def test_monthly_payment_keeps_day_of_month():
     assert payments.next_due(date(2027, 2, 28), payments.MONTHLY, 31) == date(2027, 3, 31)
     assert payments.next_due(date(2026, 10, 17), payments.WEEKLY, None) == date(2026, 10, 24)
     assert payments.next_due(date(2028, 2, 29), payments.YEARLY, None) == date(2029, 2, 28)
+
+
+async def test_timezone_change_does_not_repeat_sent_payment_reminder(db, user, fake_bot):
+    food = (await finance.categories(db, OWNER, finance.EXPENSE))[0]
+    pid = await payments.create(db, OWNER, "📱 Связь", 500_000, food["id"], None, payments.MONTHLY, TODAY, TZ)
+    await scheduler.tick(fake_bot, db, NOW + timedelta(hours=2), OWNER)  # 10:00 — напомнили
+    assert len(fake_bot.sent) == 1
+    noon = NOW + timedelta(hours=4)  # 12:00 по Алматы — сменил пояс на Москву (там 09:00)
+    await settings.update(db, OWNER, tz="Europe/Moscow")
+    await reschedule_all(db, OWNER, noon)
+    await scheduler.tick(fake_bot, db, noon, OWNER)
+    assert len(fake_bot.sent) == 1  # сегодня второй раз не шлём
+    # Сегодняшнее уже отправлено, а в Москве сейчас как раз 10:00 — следующее завтра в 10:00 по Москве.
+    assert (await payments.get(db, OWNER, pid))["next_run_at"] == "2026-10-18 07:00:00"
+
+
+async def test_timezone_change_keeps_future_payment_reminder_local_time(db, user):
+    food = (await finance.categories(db, OWNER, finance.EXPENSE))[0]
+    due = TODAY + timedelta(days=5)
+    pid = await payments.create(db, OWNER, "📺 Netflix", 300_000, food["id"], None, payments.MONTHLY, due, TZ)
+    await settings.update(db, OWNER, tz="Europe/Moscow")
+    await reschedule_all(db, OWNER, NOW)
+    assert (await payments.get(db, OWNER, pid))["next_run_at"] == "2026-10-22 07:00:00"
