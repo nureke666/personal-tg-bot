@@ -17,6 +17,7 @@ from aiosqlite import Connection
 from bot.repo import countdowns, habits, settings, tasks
 from bot.services import backup, morning, summary
 from bot.services import timeutil as tu
+from bot.services.texts import clip, esc
 from bot.views import countdowns as countdown_views
 from bot.views import habits as habit_views
 from bot.views import summary as summary_views
@@ -26,15 +27,68 @@ log = logging.getLogger(__name__)
 
 # Напоминание, пришедшее позже этого, помечается «с опозданием».
 LATE_AFTER = timedelta(minutes=10)
+# Владельцу пишем, только если планировщик падает столько времени подряд, и не чаще раза в ALERT_EVERY.
+FAIL_ALERT_AFTER = timedelta(minutes=5)
+ALERT_EVERY = timedelta(days=1)
+
+
+class Watchdog:
+    """Решает, когда сказать владельцу, что планировщик сломался и что он снова работает."""
+
+    def __init__(self) -> None:
+        self.failing_since: datetime | None = None
+        self.last_alert: datetime | None = None
+        self.alerted = False  # про текущую серию падений владелец уже знает
+
+    def should_alert(self, now: datetime) -> bool:
+        if self.failing_since is None:
+            self.failing_since = now
+        if self.alerted or now - self.failing_since < FAIL_ALERT_AFTER:
+            return False
+        return self.last_alert is None or now - self.last_alert >= ALERT_EVERY
+
+    def mark_alerted(self, now: datetime) -> None:
+        self.alerted, self.last_alert = True, now
+
+    def recovered(self) -> bool:
+        """Тик прошёл. True — владелец знал о падении, пора сказать, что всё снова работает."""
+        was_alerted = self.alerted
+        self.failing_since, self.alerted = None, False
+        return was_alerted
 
 
 async def run(bot: Bot, db: Connection, interval: int, owner_id: int | None) -> None:
+    watchdog = Watchdog()
     while True:
-        try:
-            await tick(bot, db, tu.utcnow(), owner_id)
-        except Exception:
-            log.exception("Ошибка в планировщике")
+        await guarded_tick(bot, db, tu.utcnow(), owner_id, watchdog)
         await asyncio.sleep(interval)
+
+
+async def guarded_tick(bot: Bot, db: Connection, now: datetime, owner_id: int | None, watchdog: Watchdog) -> None:
+    try:
+        await tick(bot, db, now, owner_id)
+    except Exception as error:
+        log.exception("Ошибка в планировщике")
+        if owner_id is not None and watchdog.should_alert(now):
+            text = (
+                "⚠️ <b>Планировщик падает уже 5 минут</b> — напоминания и сводки не уходят.\n"
+                f"<code>{esc(clip(f'{type(error).__name__}: {error}', 300))}</code>\n"
+                "Подробности — в логах сервера. Следующее такое сообщение — не раньше чем через сутки."
+            )
+            if await _notify(bot, owner_id, text):
+                watchdog.mark_alerted(now)
+        return
+    if owner_id is not None and watchdog.recovered():
+        await _notify(bot, owner_id, "✅ Планировщик снова работает.")
+
+
+async def _notify(bot: Bot, chat_id: int, text: str) -> bool:
+    try:
+        await bot.send_message(chat_id, text)
+    except (TelegramAPIError, OSError):
+        log.exception("Не удалось сообщить владельцу о состоянии планировщика")
+        return False
+    return True
 
 
 class Outbox:
