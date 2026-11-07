@@ -582,12 +582,29 @@ async def test_quick_text_becomes_task(db, harness, user):
 
 
 async def test_quick_amount_text_can_be_a_task(db, harness, user):
-    await harness.send("позвонить в 15")  # похоже на сумму, но это задача
+    await harness.send("позвонить 15")  # похоже на сумму, но это задача
     await harness.click(harness.button("Это задача"))
     await harness.click(harness.button("Без даты"))
     [task] = await _all_tasks(db)
-    assert task["title"] == "позвонить в 15" and task["due_date"] is None
+    assert task["title"] == "позвонить 15" and task["due_date"] is None
     assert await _ops(db) == []
+
+
+async def test_quick_phrase_with_date_becomes_task_at_once(db, harness, user):
+    await harness.send("завтра в 10 позвонить маме")
+    assert "Задача сохранена" in harness.text
+    [task] = await _all_tasks(db)
+    assert task["title"] == "Позвонить маме" and task["due_date"] == (today() + timedelta(days=1)).isoformat()
+    assert task["due_time"] == "10:00" and task["repeat"] == "none"
+    assert await tasks.pending_reminders(db, task["id"]) == 1
+
+    await harness.send("каждый понедельник спортзал в 19")
+    gym = (await _all_tasks(db))[-1]
+    assert gym["title"] == "Спортзал" and gym["repeat"] == "weekly" and gym["due_time"] == "19:00"
+    assert date.fromisoformat(gym["due_date"]).weekday() == 0
+
+    await harness.send("1500 такси")  # сумма без даты — по-прежнему расход
+    assert "Категория?" in harness.text and len(await _all_tasks(db)) == 2
 
 
 async def test_change_operation_category(db, harness, user):
