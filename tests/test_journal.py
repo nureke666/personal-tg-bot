@@ -1,15 +1,15 @@
-"""Журнал действий: что записывается, кнопки 10/25/50, у каждого свой журнал."""
+"""Журнал действий: что записывается, кнопки 10/25/50, обрезка старых записей."""
 
 from datetime import timedelta
 
 from bot.callbacks import CatCb, CountdownCb, HabitCb, JournalCb, NavCb, SetCb, TaskCb, TaskListCb
 from bot.keyboards.common import MENU_JOURNAL, main_menu
-from bot.repo import access, countdowns, finance, habits, journal, tasks
+from bot.repo import countdowns, finance, habits, journal, tasks
 from bot.services import timeutil as tu
 from bot.views.journal import journal_view
 from tests.conftest import NOW, OWNER, TZ
 
-FRIEND = 2002
+OTHER = 2002  # записи другого user_id не трогаются обрезкой
 
 
 def _entries(text: str) -> list[str]:
@@ -84,37 +84,15 @@ async def test_limit_buttons(db, harness, user):
     assert "Эта кнопка устарела" in harness.toasts[-1]
 
 
-async def test_each_user_sees_only_own_journal(db, harness, user):
-    await access.allow(db, FRIEND, "Друг", None, NOW)
-    await harness.send("500 кофе", user_id=FRIEND)
-    await harness.click(harness.button("Еда"), user_id=FRIEND)
-    await tasks.create(db, OWNER, {"title": "Задача владельца"}, TZ, NOW)
-    await harness.click(TaskListCb(view="nodate"))
-    await harness.click(harness.button("Задача владельца"))
-    await harness.click(harness.button("Выполнено"))
-
-    await harness.send(MENU_JOURNAL, user_id=FRIEND)
-    assert _entries(harness.text) == ["➖ Расход 500 ₸ · 🍔 Еда — кофе"]
-    await harness.send(MENU_JOURNAL)
-    assert _entries(harness.text) == ["✅ Выполнена задача «Задача владельца»"]
-
-
-async def test_owner_access_actions_are_logged(db, harness, user):
-    await harness.send(f"/allow {FRIEND}")
-    await harness.send(f"/deny {FRIEND}")
-    await harness.send(MENU_JOURNAL)
-    assert _entries(harness.text) == [f"🔒 Закрыт доступ: id {FRIEND}", f"🔓 Открыт доступ: id {FRIEND}"]
-
-
 async def test_old_entries_are_trimmed(db):
     for i in range(journal.KEEP + 5):
         await journal.add(db, OWNER, f"Действие {i}", NOW)
-    await journal.add(db, FRIEND, "Чужое", NOW)
+    await journal.add(db, OTHER, "Чужое", NOW)
 
     rows = await journal.recent(db, OWNER, 1000)
     assert len(rows) == journal.KEEP
     assert rows[0]["text"] == f"Действие {journal.KEEP + 4}" and rows[-1]["text"] == "Действие 5"
-    assert len(await journal.recent(db, FRIEND, 1000)) == 1
+    assert len(await journal.recent(db, OTHER, 1000)) == 1
 
 
 def test_journal_fits_one_telegram_message():

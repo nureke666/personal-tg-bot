@@ -2,6 +2,13 @@ from pathlib import Path
 
 import aiosqlite
 
+# Строки, которые не принадлежат владельцу из списка доступа. Пустой список (база старше него) —
+# всё принадлежит владельцу, ничего не выбирается.
+_NOT_OWNER = (
+    "user_id NOT IN (SELECT user_id FROM allowed_users WHERE is_owner = 1)"
+    " AND EXISTS (SELECT 1 FROM allowed_users WHERE is_owner = 1)"
+)
+
 # Каждый элемент — одна миграция. Номер применённой хранится в PRAGMA user_version.
 MIGRATIONS = [
     """
@@ -178,6 +185,21 @@ MIGRATIONS = [
     UPDATE habits SET part = CASE WHEN remind_time >= '18:00' THEN 'evening' WHEN remind_time >= '12:00' THEN 'day'
         ELSE 'morning' END
         WHERE remind_time IS NOT NULL;
+    """,
+    # Бот снова только для владельца: данные бывших гостей удаляются, список доступа и запросы — тоже.
+    f"""
+    DELETE FROM task_reminders WHERE task_id IN (SELECT id FROM tasks WHERE {_NOT_OWNER});
+    DELETE FROM tasks WHERE {_NOT_OWNER};
+    DELETE FROM habit_marks WHERE habit_id IN (SELECT id FROM habits WHERE {_NOT_OWNER});
+    DELETE FROM habits WHERE {_NOT_OWNER};
+    DELETE FROM transactions WHERE {_NOT_OWNER};
+    DELETE FROM categories WHERE {_NOT_OWNER};
+    DELETE FROM countdowns WHERE {_NOT_OWNER};
+    DELETE FROM task_log WHERE {_NOT_OWNER};
+    DELETE FROM action_log WHERE {_NOT_OWNER};
+    DELETE FROM settings WHERE {_NOT_OWNER};
+    DROP TABLE allowed_users;
+    DROP TABLE access_requests;
     """,
 ]
 

@@ -14,7 +14,7 @@ from aiogram.exceptions import TelegramAPIError, TelegramNetworkError, TelegramR
 from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, Message
 from aiosqlite import Connection
 
-from bot.repo import access, countdowns, habits, settings, tasks
+from bot.repo import countdowns, habits, settings, tasks
 from bot.services import backup, morning, summary
 from bot.services import timeutil as tu
 from bot.views import countdowns as countdown_views
@@ -28,21 +28,22 @@ log = logging.getLogger(__name__)
 LATE_AFTER = timedelta(minutes=10)
 
 
-async def run(bot: Bot, db: Connection, interval: int) -> None:
+async def run(bot: Bot, db: Connection, interval: int, owner_id: int | None) -> None:
     while True:
         try:
-            await tick(bot, db, tu.utcnow())
+            await tick(bot, db, tu.utcnow(), owner_id)
         except Exception:
             log.exception("Ошибка в планировщике")
         await asyncio.sleep(interval)
 
 
 class Outbox:
-    """Отправка из планировщика. Тем, у кого закрыт доступ, ничего не шлём, но событие считаем обработанным."""
+    """Отправка из планировщика. Шлём только владельцу; чужие события (например, после смены OWNER_ID)
+    считаем обработанными, чтобы они не копились."""
 
-    def __init__(self, bot: Bot, allowed: set[int]) -> None:
+    def __init__(self, bot: Bot, owner_id: int | None) -> None:
         self.bot = bot
-        self.allowed = allowed
+        self.owner_id = owner_id
 
     async def send(self, chat_id: int, text: str, markup: InlineKeyboardMarkup | None = None) -> bool:
         """True — обработано (доставлено или повторять бессмысленно), False — повторить в следующий тик."""
@@ -67,7 +68,7 @@ class Outbox:
         )
 
     async def _deliver(self, chat_id: int, request: Callable[[], Awaitable[object]]) -> bool:
-        if chat_id not in self.allowed:
+        if chat_id != self.owner_id:
             return True
         try:
             await request()
@@ -83,8 +84,8 @@ class Outbox:
         return True
 
 
-async def tick(bot: Bot, db: Connection, now: datetime) -> None:
-    out = Outbox(bot, await access.allowed_ids(db))
+async def tick(bot: Bot, db: Connection, now: datetime, owner_id: int | None) -> None:
+    out = Outbox(bot, owner_id)
     await roll_recurring(db, now)
     await task_reminders(out, db, now)
     await countdown_messages(out, db, now)
@@ -212,7 +213,9 @@ async def weekly_summaries(out: Outbox, db: Connection, now: datetime) -> None:
 
 
 async def backups(out: Outbox, db: Connection, now: datetime) -> None:
-    owner = await settings.due_backup(db, now)
+    if out.owner_id is None:
+        return
+    owner = await settings.due_backup(db, out.owner_id, now)
     if not owner:
         return
     tz = owner["tz"]

@@ -27,7 +27,7 @@ from bot.callbacks import (
     TimeCb,
 )
 from bot.keyboards.common import MENU_FINANCE, MENU_SUMMARY
-from bot.repo import access, countdowns, finance, habits, settings, tasks
+from bot.repo import countdowns, finance, habits, settings, tasks
 from bot.services import timeutil as tu
 from tests.conftest import OWNER, TZ
 
@@ -45,6 +45,14 @@ async def test_without_owner_bot_tells_user_id(db, make_harness):
     await harness.send("/start", user_id=777)
     assert "OWNER_ID=777" in harness.text
     assert await settings.get(db, 777) is None
+
+
+async def test_stranger_is_ignored(db, harness, user):
+    await harness.send("/start", user_id=2002)
+    await harness.send("1500 такси", user_id=2002)
+    await harness.click(TaskListCb(view="menu"), user_id=2002)
+    assert harness.session.calls == []
+    assert await settings.get(db, 2002) is None
 
 
 async def test_start_shows_menu(db, harness):
@@ -327,23 +335,13 @@ async def test_settings_timezone_and_schedule(db, harness, user):
     assert (await settings.get(db, OWNER))["start_balance"] == -500_000
 
 
-async def test_backup_settings_only_for_owner(db, make_harness, user):
-    harness = make_harness()
+async def test_backup_from_settings(db, harness, user):
     await harness.click(SetCb(act="menu"))
     assert "Бэкап базы: 03:00" in harness.text
     await harness.click(SetCb(act="sched", v="backup"))
     await harness.click(SetCb(act="backupnow"))
     [doc] = harness.documents
     assert doc.document.filename.endswith(".db") and harness.toasts[-1] == "Бэкап отправлен"
-
-    guest = 2002
-    await access.allow(db, guest, "Гость", None, tu.utcnow())
-    await harness.click(SetCb(act="menu"), user_id=guest)
-    assert "Бэкап" not in harness.text
-    await harness.click(SetCb(act="backupnow"), user_id=guest)
-    await harness.click(SetCb(act="toggle", v="backup"), user_id=guest)
-    assert len(harness.documents) == 1
-    assert (await settings.get(db, guest))["backup_on"] == 1
 
 
 async def test_morning_list_pinned_from_settings_and_kept_in_sync(db, harness, user):

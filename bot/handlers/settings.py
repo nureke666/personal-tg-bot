@@ -29,18 +29,18 @@ class SettingsForm(StatesGroup):
 
 
 async def open_settings(
-    event: Message | CallbackQuery, db: Connection, user_id: int, is_owner: bool, header: str | None = None
+    event: Message | CallbackQuery, db: Connection, user_id: int, header: str | None = None
 ) -> None:
-    text, markup = views.settings_view(await repo.get(db, user_id), is_owner)
+    text, markup = views.settings_view(await repo.get(db, user_id))
     await show(event, f"{header}\n\n{text}" if header else text, markup)
 
 
-async def _set_tz(event: Message | CallbackQuery, db: Connection, user_id: int, is_owner: bool, tz: str) -> None:
+async def _set_tz(event: Message | CallbackQuery, db: Connection, user_id: int, tz: str) -> None:
     await repo.update(db, user_id, tz=tz)
     await reschedule_all(db, user_id, tu.utcnow())
     header = f"🌍 Часовой пояс: {views.tz_title(tz)}"
     await journal.add(db, user_id, header)
-    await open_settings(event, db, user_id, is_owner, header)
+    await open_settings(event, db, user_id, header)
 
 
 @router.callback_query(SetCb.filter())
@@ -50,18 +50,17 @@ async def settings_action(
     state: FSMContext,
     db: Connection,
     settings: Row,
-    is_owner: bool,
     callback_answer: CallbackAnswer,
 ) -> None:
     act, value, uid = callback_data.act, callback_data.v, settings["user_id"]
-    schedules = views.schedule_keys(is_owner)
+    schedules = views.SCHEDULES
     await state.clear()
     if act == "menu":
-        await open_settings(callback, db, uid, is_owner)
+        await open_settings(callback, db, uid)
     elif act == "tz":
         await show(callback, "🌍 <b>Часовой пояс</b>\nОт него зависит, когда приходят напоминания.", views.tz_kb())
     elif act == "tzset" and tu.is_valid_tz(value):
-        await _set_tz(callback, db, uid, is_owner, value)
+        await _set_tz(callback, db, uid, value)
     elif act == "tzinput":
         await state.set_state(SettingsForm.tz)
         await show(
@@ -74,7 +73,7 @@ async def settings_action(
     elif act == "curset" and value in views.CURRENCIES:
         await repo.update(db, uid, currency=value)
         await journal.add(db, uid, f"💱 Валюта: {value}")
-        await open_settings(callback, db, uid, is_owner, f"💱 Валюта: {value}")
+        await open_settings(callback, db, uid, f"💱 Валюта: {value}")
     elif act == "balance":
         await state.set_state(SettingsForm.balance)
         await show(
@@ -95,7 +94,7 @@ async def settings_action(
         await journal.add(db, uid, f"{views.SCHEDULES[value][0]}: {'включено' if on else 'выключено'}")
         callback_answer.text = "Включено" if on else "Выключено"
         await show(callback, *views.schedule_view(await repo.get(db, uid), value))
-    elif act == "backupnow" and is_owner:
+    elif act == "backupnow":
         day = tu.local_today(settings["tz"])
         await callback.message.answer_document(await backup.snapshot(db, day), caption=backup.caption(day))
         callback_answer.text = "Бэкап отправлен"
@@ -120,17 +119,17 @@ async def settings_action(
 
 
 @router.message(SettingsForm.tz, F.text)
-async def got_tz(message: Message, state: FSMContext, db: Connection, settings: Row, is_owner: bool) -> None:
+async def got_tz(message: Message, state: FSMContext, db: Connection, settings: Row) -> None:
     tz = message.text.strip()
     if not tu.is_valid_tz(tz):
         await message.answer("Не знаю такой пояс. Пример: <code>Asia/Almaty</code>.", reply_markup=BACK)
         return
     await state.clear()
-    await _set_tz(message, db, settings["user_id"], is_owner, tz)
+    await _set_tz(message, db, settings["user_id"], tz)
 
 
 @router.message(SettingsForm.balance, F.text)
-async def got_balance(message: Message, state: FSMContext, db: Connection, settings: Row, is_owner: bool) -> None:
+async def got_balance(message: Message, state: FSMContext, db: Connection, settings: Row) -> None:
     value = parse_amount(message.text, allow_negative=True, allow_zero=True)
     if value is None:
         await message.answer("Не понял сумму. Напиши число, например <code>150000</code>.", reply_markup=BACK)
@@ -139,7 +138,7 @@ async def got_balance(message: Message, state: FSMContext, db: Connection, setti
     await repo.update(db, settings["user_id"], start_balance=value)
     header = f"💼 Начальный баланс: {fmt_money(value, settings['currency'])}"
     await journal.add(db, settings["user_id"], header)
-    await open_settings(message, db, settings["user_id"], is_owner, header)
+    await open_settings(message, db, settings["user_id"], header)
 
 
 @router.callback_query(TimeCb.filter(F.action == "pick"), SettingsForm.time)

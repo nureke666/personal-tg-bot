@@ -22,7 +22,7 @@ from aiogram.types import CallbackQuery, Chat, InlineKeyboardMarkup, Message, Up
 from bot import db as database
 from bot.__main__ import build_dispatcher
 from bot.config import Config
-from bot.repo import access, settings
+from bot.repo import settings
 
 OWNER = 1001
 TZ = "Asia/Almaty"
@@ -39,8 +39,6 @@ async def db():
 
 @pytest.fixture
 async def user(db):
-    # Как при старте бота: владелец из OWNER_ID записывается в список доступа.
-    await access.sync_owner(db, OWNER, NOW)
     return await settings.ensure(db, OWNER, TZ, NOW)
 
 
