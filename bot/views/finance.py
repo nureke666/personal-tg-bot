@@ -114,7 +114,7 @@ def accounts_view(
     if archived:
         rows += chunks([btn(f"🗄 {a['name']}", AccCb(act="open", id=a["id"])) for a in archived], 2)
     rows.append([btn("➕ Новый счёт", AccCb(act="new")), btn("🔁 Перевод", AccCb(act="transfer"))])
-    rows.append([btn("◀ Финансы", FinCb(act="menu"))])
+    rows.append([btn("🧾 Переводы", AccCb(act="transfers")), btn("◀ Финансы", FinCb(act="menu"))])
     return "\n".join(lines), kb(*rows)
 
 
@@ -135,6 +135,25 @@ def account_card(account: Mapping, balance: int, is_default: bool, currency: str
         [toggle] if not is_default else [],
         [btn("◀ Счета", AccCb(act="list"))],
     )
+
+
+def transfers_view(transfers: Sequence[Mapping], currency: str, today: date) -> tuple[str, InlineKeyboardMarkup]:
+    text = "🧾 <b>Последние переводы</b>\nНажми, чтобы удалить ошибочный." if transfers else "🧾 Переводов пока нет."
+    rows = [
+        [
+            btn(
+                clip(
+                    f"{fmt_date(date.fromisoformat(t['op_date']), today)} · {fmt_money(t['amount'], currency)} · "
+                    f"{t['from_name']} → {t['to_name']}",
+                    60,
+                ),
+                AccCb(act="tdel", id=t["id"]),
+            )
+        ]
+        for t in transfers
+    ]
+    rows.append([btn("◀ Счета", AccCb(act="list"))])
+    return text, kb(*rows)
 
 
 def transfer_pick_kb(accounts: Sequence[Mapping], act: str, from_id: int = 0) -> InlineKeyboardMarkup:

@@ -138,6 +138,24 @@ async def add_transfer(
     )
 
 
+_TRANSFER_SELECT = (
+    "SELECT t.*, f.name AS from_name, o.name AS to_name FROM transfers t"
+    " JOIN accounts f ON f.id = t.from_id JOIN accounts o ON o.id = t.to_id"
+)
+
+
+async def recent_transfers(db: Connection, user_id: int, limit: int = 15) -> list[Row]:
+    return await fetchall(db, _TRANSFER_SELECT + " WHERE t.user_id = ? ORDER BY t.id DESC LIMIT ?", (user_id, limit))
+
+
+async def transfer(db: Connection, user_id: int, transfer_id: int) -> Row | None:
+    return await fetchone(db, _TRANSFER_SELECT + " WHERE t.id = ? AND t.user_id = ?", (transfer_id, user_id))
+
+
+async def delete_transfer(db: Connection, transfer_id: int) -> None:
+    await execute(db, "DELETE FROM transfers WHERE id = ?", (transfer_id,))
+
+
 # --- операции ---
 async def add_op(
     db: Connection,

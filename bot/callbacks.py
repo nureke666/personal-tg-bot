@@ -70,7 +70,8 @@ class FinCb(CallbackData, prefix="fn"):
 
 
 class AccCb(CallbackData, prefix="acc"):
-    # list / open / new / rename / start / default / archive / restore / transfer / tfrom / tto
+    # list / open / new / rename / start / default / archive / restore
+    # transfer / tfrom / tto — новый перевод, transfers / tdel / tdelok — список и удаление
     act: str
     id: int = 0
     v: str = ""
