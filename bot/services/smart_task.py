@@ -3,7 +3,8 @@
 Свои правила, без сети и платных вызовов. Понимает: сегодня / завтра / послезавтра, дни недели,
 «15 ноября», «15.11», время «в 10», «в 10:30», «в 7 вечера», «через 2 часа / 3 дня / неделю»,
 повторы «каждый день», «по будням», «каждую неделю», «каждый месяц», «каждый понедельник».
-Если ничего из этого нет — возвращает None, и текст разбирается как раньше (сумма или кнопки).
+Если ничего из этого нет, в тексте есть сумма или время уже прошло — возвращает None, и текст разбирается
+как раньше (сумма или кнопки).
 """
 
 import re
@@ -11,6 +12,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 
 from bot.services import timeutil as tu
+from bot.services.quick import parse_op
 
 _MONTHS = ("январ", "феврал", "март", "апрел", "ма", "июн", "июл", "август", "сентябр", "октябр", "ноябр", "декабр")
 _MONTH_WORD = (
@@ -40,8 +42,9 @@ _EVERY_WEEKDAY = re.compile(rf"{_B}(?:кажд(?:ый|ую|ое)|по)\s+(?:{_WE
 _ON_WEEKDAY = re.compile(rf"{_B}(?:на|во?)\s+(?:{_WEEKDAY}){_E}", re.I)
 _RELATIVE_DAY = re.compile(rf"{_B}(?:на\s+)?(сегодня|завтра|послезавтра){_E}", re.I)
 _DAY_MONTH = re.compile(rf"{_B}(?:на\s+)?(\d{{1,2}})\s+{_MONTH_WORD}{_E}", re.I)
-# Месяц — двумя цифрами: «1.5» — это скорее сумма, чем 1 мая.
-_DAY_DOT_MONTH = re.compile(rf"{_B}(?:на\s+)?(\d{{1,2}})[./](\d{{2}})(?:[./](\d{{2}}|\d{{4}}))?{_E}")
+# Месяц — двумя цифрами: «1.5» — это скорее сумма, чем 1 мая. Без года «12.10» — дата, только если перед ней
+# предлог или в тексте есть время: «кофе 12.10» — это расход 12,10.
+_DAY_DOT_MONTH = re.compile(rf"{_B}(?:(на|к|до)\s+)?(\d{{1,2}})[./](\d{{2}})(?:[./](\d{{2}}|\d{{4}}))?{_E}")
 _IN = re.compile(
     rf"{_B}через\s+(?:(\d+)\s+)?(полчаса|минут[уы]?|час(?:а|ов)?|день|дн(?:я|ей)|недел(?:ю|и|ь))(?![\w])", re.I
 )
@@ -86,10 +89,10 @@ def _hour(value: str, part: str | None) -> int | None:
 def _future_date(day: int, month: int, year: int | None, today: date) -> date | None:
     try:
         result = date(year or today.year, month, day)
-    except ValueError:
+        if year is None and result < today:
+            result = date(today.year + 1, month, day)
+    except ValueError:  # 31.02 или 29 февраля, когда следующий год не високосный
         return None
-    if year is None and result < today:
-        result = date(today.year + 1, month, day)
     return result
 
 
@@ -155,9 +158,10 @@ def parse(text: str, now: datetime) -> TaskGuess | None:
 
     # После времени: «в 10.30» — это время, а «15.11» без предлога — дата.
     if due_date is None and (match := _DAY_DOT_MONTH.search(rest)):
-        year = match.group(3)
+        prep, day, month, year = match.groups()
         year = int(year) + (2000 if len(year) == 2 else 0) if year else None
-        if (parsed := _future_date(int(match.group(1)), int(match.group(2)), year, today)) is not None:
+        trusted = year is not None or prep is not None or due_time is not None
+        if trusted and (parsed := _future_date(int(day), int(month), year, today)) is not None:
             due_date = parsed
             cut(match)
 
@@ -169,10 +173,17 @@ def parse(text: str, now: datetime) -> TaskGuess | None:
         due_date = today + timedelta(days=1) if late else today
     if by_weekday and due_date == today and due_time is not None and due_time <= now.time():
         due_date += timedelta(days=7)
+    if due_date < today or (due_date == today and due_time is not None and due_time <= now.time()):
+        if repeat == tu.REPEAT_NONE:
+            return None  # «сегодня в 9» в 15:00 или прошедшая дата — пусть человек выберет сам
+        anchor = due_date.day
+        while due_date < today or (due_date == today and due_time is not None and due_time <= now.time()):
+            due_date = tu.next_repeat_date(due_date, repeat, anchor)
     if repeat == tu.REPEAT_WEEKDAYS:
         while due_date.weekday() >= 5:
             due_date += timedelta(days=1)
     title = _REMIND.sub("", re.sub(r"\s+", " ", rest).strip(" ,.;:-—")).strip(" ,.;:-—")
-    if not title:
+    if not title or parse_op(title) is not None:
+        # Пусто или осталась сумма («сегодня такси 1500») — это не задача, разбираем как раньше.
         return None
     return TaskGuess(title[0].upper() + title[1:], due_date, due_time, repeat)
