@@ -173,10 +173,15 @@ async def payment_action(
         callback_answer.text = "Этот платёж уже отмечен"
         await show_card(callback, db, settings, payment["id"])
         return
+    if act in ("paid", "skip"):
+        new_due = await repo.advance(db, payment, tz)
+        if new_due is None:
+            callback_answer.text = "Этот платёж уже отмечен"
+            await show_card(callback, db, settings, payment["id"])
+            return
     if act == "open":
         await show_card(callback, db, settings, payment["id"])
     elif act == "paid":
-        new_due = await repo.advance(db, payment, tz)
         account = payment["account_id"] or settings["default_account_id"]
         await journal.add(db, uid, f"📅 Оплачен платёж {quote(payment['title'])}")
         await finance_handlers.record_op(
@@ -195,7 +200,6 @@ async def payment_action(
         callback_answer.text = "Напомню завтра"
         await show(callback, f"⏰ {esc(payment['title'])}: напомню завтра.", views.BACK_TO_LIST)
     elif act == "skip":
-        new_due = await repo.advance(db, payment, tz)
         await journal.add(db, uid, f"⏭ Пропущен платёж {quote(payment['title'])}")
         await show_list(
             callback, db, settings, f"⏭ {esc(payment['title'])}: пропущен, следующий — {fmt_date(new_due, today)}"
