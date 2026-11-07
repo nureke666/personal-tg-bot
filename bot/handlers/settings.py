@@ -14,7 +14,6 @@ from bot.repo import settings as repo
 from bot.services import backup, morning
 from bot.services import timeutil as tu
 from bot.services.planning import reschedule_all
-from bot.services.texts import fmt_money, parse_amount
 from bot.views import settings as views
 
 router = Router(name="settings")
@@ -24,7 +23,6 @@ BACK = kb([btn("✖ Отмена", SetCb(act="menu"))])
 
 class SettingsForm(StatesGroup):
     tz = State()
-    balance = State()
     time = State()
 
 
@@ -74,15 +72,6 @@ async def settings_action(
         await repo.update(db, uid, currency=value)
         await journal.add(db, uid, f"💱 Валюта: {value}")
         await open_settings(callback, db, uid, f"💱 Валюта: {value}")
-    elif act == "balance":
-        await state.set_state(SettingsForm.balance)
-        await show(
-            callback,
-            "💼 <b>Начальный баланс</b>\n"
-            f"Сейчас: {fmt_money(settings['start_balance'], settings['currency'])}\n\n"
-            "Сколько денег было до того, как ты начал вести учёт? Напиши число (можно отрицательное).",
-            BACK,
-        )
     elif act == "sched" and value in schedules:
         await show(callback, *views.schedule_view(settings, value))
     elif act == "toggle" and value in schedules:
@@ -126,19 +115,6 @@ async def got_tz(message: Message, state: FSMContext, db: Connection, settings: 
         return
     await state.clear()
     await _set_tz(message, db, settings["user_id"], tz)
-
-
-@router.message(SettingsForm.balance, F.text)
-async def got_balance(message: Message, state: FSMContext, db: Connection, settings: Row) -> None:
-    value = parse_amount(message.text, allow_negative=True, allow_zero=True)
-    if value is None:
-        await message.answer("Не понял сумму. Напиши число, например <code>150000</code>.", reply_markup=BACK)
-        return
-    await state.clear()
-    await repo.update(db, settings["user_id"], start_balance=value)
-    header = f"💼 Начальный баланс: {fmt_money(value, settings['currency'])}"
-    await journal.add(db, settings["user_id"], header)
-    await open_settings(message, db, settings["user_id"], header)
 
 
 @router.callback_query(TimeCb.filter(F.action == "pick"), SettingsForm.time)

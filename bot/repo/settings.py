@@ -7,7 +7,7 @@ from bot.repo import finance
 from bot.services import timeutil as tu
 
 FIELDS = {
-    "tz", "currency", "start_balance", "month_limit",
+    "tz", "currency", "month_limit", "default_account_id",
     "digest_on", "digest_time", "digest_next_at",
     "checkin_on", "checkin_time", "checkin_next_at",
     "backup_on", "backup_time", "backup_next_at",
@@ -48,6 +48,7 @@ async def ensure(db: Connection, user_id: int, tz: str, now: datetime | None = N
         tuple(values.values()),
     )
     await finance.seed_categories(db, user_id)
+    await finance.seed_accounts(db, user_id)
     return await get(db, user_id)
 
 

@@ -246,8 +246,22 @@ def test_limit_alerts_only_when_crossing():
 # --- выгрузка ---
 
 OPS = [
-    {"op_date": "2026-10-01", "kind": "income", "category": "💼 Зарплата", "amount": 50_000_000, "comment": None},
-    {"op_date": "2026-10-02", "kind": "expense", "category": "🍔 Еда", "amount": 150_050, "comment": "кофе; булка"},
+    {
+        "op_date": "2026-10-01",
+        "kind": "income",
+        "category": "💼 Зарплата",
+        "amount": 50_000_000,
+        "comment": None,
+        "account": "💳 Карта",
+    },
+    {
+        "op_date": "2026-10-02",
+        "kind": "expense",
+        "category": "🍔 Еда",
+        "amount": 150_050,
+        "comment": "кофе; булка",
+        "account": None,
+    },
 ]
 
 
@@ -255,8 +269,9 @@ def test_csv_is_excel_friendly():
     content = export.to_csv(OPS)
     assert content.startswith(b"\xef\xbb\xbf")
     text = content.decode("utf-8-sig")
-    assert text.splitlines()[0] == "Дата;Тип;Категория;Сумма;Комментарий"
-    assert '02.10.2026;Расход;🍔 Еда;1500,50;"кофе; булка"' in text
+    assert text.splitlines()[0] == "Дата;Тип;Категория;Сумма;Комментарий;Счёт"
+    assert '02.10.2026;Расход;🍔 Еда;1500,50;"кофе; булка";' in text
+    assert "01.10.2026;Доход;💼 Зарплата;500000,00;;💳 Карта" in text
 
 
 def test_xlsx_has_operations_and_summary():
