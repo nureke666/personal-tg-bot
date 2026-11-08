@@ -1,5 +1,6 @@
 """Сквозные сценарии: апдейты идут через настоящий Dispatcher, Bot API подменён записью вызовов."""
 
+import asyncio
 from datetime import UTC, date, datetime, timedelta
 
 from aiogram.methods import EditMessageText, PinChatMessage, UnpinChatMessage
@@ -239,6 +240,121 @@ async def test_categories_add_and_archive(db, harness, user):
     coffee = next(c for c in await finance.categories(db, OWNER, "expense") if c["name"] == "☕ Кофе")
     await harness.click(CatCb(act="archive", id=coffee["id"]))
     assert "☕ Кофе" not in [c["name"] for c in await finance.categories(db, OWNER, "expense")]
+
+
+async def test_category_name_must_be_unique(db, harness, user):
+    food = (await finance.categories(db, OWNER, "expense"))[0]
+    await harness.click(CatCb(act="add", kind="expense"))
+    await harness.send(food["name"])
+    assert "уже есть" in harness.text
+    await harness.send("☕ Кофе")  # мастер не сбросился, можно ввести другое название
+    names = [c["name"] for c in await finance.categories(db, OWNER, "expense")]
+    assert names.count(food["name"]) == 1 and "☕ Кофе" in names
+
+
+async def test_empty_category_is_deleted_after_confirm(db, harness, user):
+    coffee = await finance.add_category(db, OWNER, "expense", "☕ Кофе")
+    await harness.click(CatCb(act="open", id=coffee))
+    await harness.click(harness.button("Удалить"))
+    assert "Удалить категорию ☕ Кофе?" in harness.text
+    assert await finance.category(db, OWNER, coffee) is not None
+    await harness.click(harness.button("Да, удалить"))
+    assert await finance.category(db, OWNER, coffee) is None
+    assert "Категория удалена" in harness.text and "☕ Кофе" not in harness.labels
+
+
+async def test_category_with_records_is_deleted_after_moving_them(db, harness, user):
+    food, transport = (await finance.categories(db, OWNER, "expense"))[:2]
+    op_id = await finance.add_op(db, OWNER, "expense", 10_000, food["id"], None, today(), tu.utcnow())
+    pid = await payments.create(db, OWNER, "🍕 Пицца", 50_000, food["id"], None, "monthly", today(), TZ)
+    await harness.click(CatCb(act="delete", id=food["id"]))
+    assert "1 операция и 1 регулярный платёж" in harness.text
+    assert food["name"] not in harness.labels  # переносить в саму себя нельзя
+    assert not any("Подарок" in label for label in harness.labels)  # и в категорию доходов
+    await harness.click(harness.button(transport["name"]))
+    assert await finance.category(db, OWNER, food["id"]) is None
+    assert (await finance.op(db, OWNER, op_id))["category_id"] == transport["id"]
+    assert (await payments.get(db, OWNER, pid))["category_id"] == transport["id"]
+    assert "перенесены" in harness.text
+
+
+async def test_last_category_cannot_be_deleted(db, harness, user):
+    *others, last = await finance.categories(db, OWNER, "income")
+    for category in others:
+        await harness.click(CatCb(act="delok", id=category["id"]))
+    await harness.click(CatCb(act="delete", id=last["id"]))
+    assert harness.toasts[-1] == "Должна остаться хотя бы одна категория"
+    assert [c["id"] for c in await finance.categories(db, OWNER, "income")] == [last["id"]]
+
+
+async def test_stale_move_button_changes_nothing(db, harness, user):
+    food, transport = (await finance.categories(db, OWNER, "expense"))[:2]
+    await harness.click(CatCb(act="into", id=transport["id"]))
+    assert "устарела" in harness.toasts[-1]
+    assert await finance.category(db, OWNER, food["id"]) is not None
+
+
+async def test_same_name_sent_twice_at_once_makes_one_category(db, harness, user):
+    await harness.click(CatCb(act="add", kind="expense"))
+    await asyncio.gather(harness.send("☕ Кофе"), harness.send("☕ Кофе"))
+    names = [c["name"] for c in await finance.categories(db, OWNER, "expense")]
+    assert names.count("☕ Кофе") == 1
+    assert all("Категории расходов" in screen.text for screen in harness.screens()[-2:])
+
+
+async def test_category_rename_checks_other_names_only(db, harness, user):
+    food, transport = (await finance.categories(db, OWNER, "expense"))[:2]
+    await harness.click(CatCb(act="rename", id=food["id"]))
+    await harness.send(transport["name"])
+    assert "уже есть" in harness.text
+    await harness.send(food["name"])  # своё же название — не дубль
+    assert (await finance.category(db, OWNER, food["id"]))["name"] == food["name"]
+    assert "уже есть" not in harness.text
+
+
+async def test_move_button_from_another_delete_screen_is_stale(db, harness, user):
+    food, transport, housing = (await finance.categories(db, OWNER, "expense"))[:3]
+    for category in (food, housing):
+        await finance.add_op(db, OWNER, "expense", 10_000, category["id"], None, today(), tu.utcnow())
+    await harness.click(CatCb(act="delete", id=food["id"]), message_id=500)
+    await harness.click(CatCb(act="delete", id=housing["id"]), message_id=600)
+    await harness.click(CatCb(act="into", id=transport["id"]), message_id=500)
+    assert "устарела" in harness.toasts[-1]
+    assert await finance.category(db, OWNER, food["id"]) and await finance.category(db, OWNER, housing["id"])
+    await harness.click(CatCb(act="into", id=transport["id"]), message_id=600)
+    assert await finance.category(db, OWNER, housing["id"]) is None
+    assert await finance.category(db, OWNER, food["id"]) is not None
+    assert f"Категория {housing['name']} удалена" in harness.text
+
+
+async def test_hidden_category_with_records_is_deleted_after_moving_them(db, harness, user):
+    food, transport = (await finance.categories(db, OWNER, "expense"))[:2]
+    op_id = await finance.add_op(db, OWNER, "expense", 10_000, food["id"], None, today(), tu.utcnow())
+    await finance.set_category_archived(db, food["id"], True)
+    await harness.click(CatCb(act="delete", id=food["id"]))
+    await harness.click(harness.button(transport["name"]))
+    assert await finance.category(db, OWNER, food["id"]) is None
+    assert (await finance.op(db, OWNER, op_id))["category_id"] == transport["id"]
+
+
+async def test_records_are_not_moved_into_hidden_or_income_category(db, harness, user):
+    food, transport = (await finance.categories(db, OWNER, "expense"))[:2]
+    salary = (await finance.categories(db, OWNER, "income"))[0]
+    op_id = await finance.add_op(db, OWNER, "expense", 10_000, food["id"], None, today(), tu.utcnow())
+    await finance.set_category_archived(db, transport["id"], True)
+    for target in (salary, transport):
+        await harness.click(CatCb(act="delete", id=food["id"]))
+        await harness.click(CatCb(act="into", id=target["id"]))
+        assert harness.text == "Категория не найдена."
+    assert (await finance.op(db, OWNER, op_id))["category_id"] == food["id"]
+
+
+async def test_double_delete_confirm_says_already_deleted(db, harness, user):
+    coffee = await finance.add_category(db, OWNER, "expense", "☕ Кофе")
+    await asyncio.gather(*(harness.click(CatCb(act="delok", id=coffee)) for _ in range(2)))
+    assert await finance.category(db, OWNER, coffee) is None
+    texts = [screen.text for screen in harness.screens()]
+    assert any("уже удалена" in text for text in texts) and not any("перенести" in text for text in texts)
 
 
 async def test_countdown_wizard_and_send_now(db, harness):

@@ -1,4 +1,5 @@
 import math
+import sqlite3
 from datetime import date, timedelta
 
 from aiogram import F, Router
@@ -34,6 +35,7 @@ class FinForm(StatesGroup):
     op_date = State()
     limit = State()
     cat_name = State()
+    cat_move = State()
 
 
 class AccForm(StatesGroup):
@@ -109,11 +111,14 @@ async def show_limits(event: Message | CallbackQuery, db: Connection, settings: 
     )
 
 
-async def show_categories(event: Message | CallbackQuery, db: Connection, settings: Row, kind: str) -> None:
+async def show_categories(
+    event: Message | CallbackQuery, db: Connection, settings: Row, kind: str, header: str | None = None
+) -> None:
     uid = settings["user_id"]
     active = await repo.categories(db, uid, kind)
     archived = await repo.categories(db, uid, kind, archived=True)
-    await show(event, *views.categories_view(kind, active, archived))
+    text, markup = views.categories_view(kind, active, archived)
+    await show(event, f"{header}\n\n{text}" if header else text, markup)
 
 
 async def show_op(
@@ -426,6 +431,80 @@ async def remove_limit(callback: CallbackQuery, state: FSMContext, db: Connectio
 
 
 # --- категории ---
+STALE_MOVE = "Кнопка устарела — нажми «Удалить» ещё раз"
+
+
+async def delete_category(
+    callback: CallbackQuery,
+    state: FSMContext,
+    db: Connection,
+    settings: Row,
+    category: Row,
+    callback_answer: CallbackAnswer,
+    confirmed: bool,
+) -> None:
+    uid = settings["user_id"]
+    active = await repo.categories(db, uid, category["kind"])
+    if not category["archived"] and len(active) <= 1:
+        callback_answer.text = "Должна остаться хотя бы одна категория"
+        return
+    ops, pays = await repo.category_usage(db, category["id"])
+    if not ops and not pays:
+        if not confirmed:
+            await show(
+                callback,
+                f"🗑 Удалить категорию {esc(category['name'])}?",
+                confirm_kb(CatCb(act="delok", id=category["id"]), CatCb(act="open", id=category["id"])),
+            )
+            return
+        if await repo.delete_category(db, category["id"]):
+            await journal.add(db, uid, f"🗑 Удалена категория {quote(category['name'])}")
+            await show_categories(callback, db, settings, category["kind"], header="🗑 Категория удалена")
+            return
+        if not await repo.category(db, uid, category["id"]):  # второе нажатие «Да, удалить»
+            await show_categories(callback, db, settings, category["kind"], header="🗑 Категория уже удалена")
+            return
+        ops, pays = await repo.category_usage(db, category["id"])  # записи появились, пока подтверждали
+    await state.set_state(FinForm.cat_move)
+    # Кнопка переноса несёт только цель: какую категорию удаляем, берём из состояния, но только для того
+    # сообщения, где показан этот экран. Иначе кнопка со старого экрана удалила бы другую категорию.
+    await state.update_data(category_id=category["id"], move_mid=callback.message.message_id)
+    targets = [c for c in active if c["id"] != category["id"]]
+    await show(callback, *views.category_move_view(category, ops, pays, targets))
+
+
+# Раньше category_action: тот ловит любые кнопки категорий, кроме «pick».
+@router.callback_query(CatCb.filter(F.act == "into"), FinForm.cat_move)
+async def got_move_target(
+    callback: CallbackQuery,
+    callback_data: CatCb,
+    state: FSMContext,
+    db: Connection,
+    settings: Row,
+    callback_answer: CallbackAnswer,
+) -> None:
+    data = await state.get_data()
+    if data.get("move_mid") != callback.message.message_id:
+        callback_answer.text = STALE_MOVE
+        return
+    await state.clear()
+    uid, source_id = settings["user_id"], data.get("category_id") or 0
+    source = await repo.category(db, uid, source_id)
+    target = await repo.category(db, uid, callback_data.id)
+    if not source or not target or target["archived"] or target["kind"] != source["kind"] or target["id"] == source_id:
+        await show(callback, "Категория не найдена.", BACK_TO_FINANCE)
+        return
+    if not await repo.move_category(db, source["id"], target["id"]):
+        if await repo.category(db, uid, source_id):
+            await show(callback, *views.category_card(source))
+        else:
+            await show_categories(callback, db, settings, source["kind"], header="🗑 Категория уже удалена")
+        return
+    await journal.add(db, uid, f"🗑 Удалена категория {quote(source['name'])}, записи → {quote(target['name'])}")
+    header = f"🗑 Категория {esc(source['name'])} удалена, записи перенесены в {esc(target['name'])}"
+    await show_categories(callback, db, settings, source["kind"], header=header)
+
+
 @router.callback_query(CatCb.filter(F.act != "pick"))
 async def category_action(
     callback: CallbackQuery,
@@ -471,21 +550,35 @@ async def category_action(
         await repo.set_category_archived(db, category["id"], False)
         await journal.add(db, uid, f"👁 Категория {quote(category['name'])} снова в списке")
         await show(callback, *views.category_card(await repo.category(db, uid, category["id"])))
+    elif act in ("delete", "delok"):
+        await delete_category(callback, state, db, settings, category, callback_answer, confirmed=act == "delok")
+    elif act == "into":
+        callback_answer.text = STALE_MOVE
 
 
 @router.message(FinForm.cat_name, F.text)
 async def got_category_name(message: Message, state: FSMContext, db: Connection, settings: Row) -> None:
     data = await state.get_data()
-    await state.clear()
     name, uid = message.text.strip()[:40], settings["user_id"]
-    if data.get("category_id"):
-        old = await repo.category(db, uid, data["category_id"])
-        await repo.rename_category(db, data["category_id"], name)
-        await journal.add(db, uid, f"✏️ Категория {quote(old['name'])} → {quote(name)}")
-    else:
-        await repo.add_category(db, uid, data["kind"], name)
-        kind = "расходов" if data["kind"] == repo.EXPENSE else "доходов"
-        await journal.add(db, uid, f"🗂 Новая категория {kind} {quote(name)}")
+    same = await repo.category_named(db, uid, data["kind"], name)
+    if same and same["id"] != data.get("category_id"):
+        hidden = " среди скрытых" if same["archived"] else ""
+        await message.answer(f"Категория {esc(name)} уже есть{hidden}. Напиши другое название.")
+        return
+    await state.clear()
+    try:
+        if data.get("category_id"):
+            old = await repo.category(db, uid, data["category_id"])
+            await repo.rename_category(db, data["category_id"], name)
+            entry = f"✏️ Категория {quote(old['name'])} → {quote(name)}"
+        else:
+            await repo.add_category(db, uid, data["kind"], name)
+            kind = "расходов" if data["kind"] == repo.EXPENSE else "доходов"
+            entry = f"🗂 Новая категория {kind} {quote(name)}"
+    except sqlite3.IntegrityError:  # то же название пришло вторым сообщением одновременно с первым
+        await show_categories(message, db, settings, data["kind"])
+        return
+    await journal.add(db, uid, entry)
     await show_categories(message, db, settings, data["kind"])
 
 

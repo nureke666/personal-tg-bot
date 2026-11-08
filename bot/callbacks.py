@@ -92,7 +92,7 @@ class OpCb(CallbackData, prefix="op"):
 
 
 class CatCb(CallbackData, prefix="ct"):
-    act: str  # pick / list / open / rename / archive / restore / add / limit
+    act: str  # pick / list / open / rename / archive / restore / add / limit / delete / delok / into
     id: int = 0
     kind: str = ""
 

@@ -43,11 +43,16 @@ def _range(start: date | None, end: date | None, column: str = "op_date") -> tup
 
 # --- категории ---
 async def seed_categories(db: Connection, user_id: int) -> None:
-    if await scalar(db, "SELECT COUNT(*) FROM categories WHERE user_id = ?", (user_id,)):
-        return
-    for kind, names in DEFAULT_CATEGORIES.items():
-        for name in names:
-            await execute(db, "INSERT INTO categories (user_id, kind, name) VALUES (?, ?, ?)", (user_id, kind, name))
+    # Одним запросом: первые апдейты обрабатываются параллельно, и проверка с вставками по очереди
+    # создавала набор дважды.
+    rows = [(kind, name) for kind, names in DEFAULT_CATEGORIES.items() for name in names]
+    await execute(
+        db,
+        "INSERT INTO categories (user_id, kind, name) SELECT ?, column1, column2"
+        f" FROM (VALUES {', '.join(['(?, ?)'] * len(rows))})"
+        " WHERE NOT EXISTS (SELECT 1 FROM categories WHERE user_id = ?)",
+        (user_id, *(value for row in rows for value in row), user_id),
+    )
 
 
 async def categories(db: Connection, user_id: int, kind: str, archived: bool = False) -> list[Row]:
@@ -78,13 +83,54 @@ async def set_category_limit(db: Connection, category_id: int, limit: int | None
     await execute(db, "UPDATE categories SET month_limit = ? WHERE id = ?", (limit, category_id))
 
 
+async def category_usage(db: Connection, category_id: int) -> tuple[int, int]:
+    """Сколько операций и регулярных платежей в категории."""
+    ops = await scalar(db, "SELECT COUNT(*) FROM transactions WHERE category_id = ?", (category_id,))
+    pays = await scalar(db, "SELECT COUNT(*) FROM payments WHERE category_id = ?", (category_id,))
+    return ops, pays
+
+
+async def category_named(db: Connection, user_id: int, kind: str, name: str) -> Row | None:
+    return await fetchone(
+        db, "SELECT * FROM categories WHERE user_id = ? AND kind = ? AND name = ?", (user_id, kind, name)
+    )
+
+
+async def delete_category(db: Connection, category_id: int) -> bool:
+    """Удаляет пустую категорию. False — в ней есть операции или платежи, ничего не тронуто."""
+    async with db.execute(
+        "DELETE FROM categories WHERE id = ?"
+        " AND NOT EXISTS (SELECT 1 FROM transactions WHERE category_id = ?)"
+        " AND NOT EXISTS (SELECT 1 FROM payments WHERE category_id = ?)",
+        (category_id, category_id, category_id),
+    ) as cursor:
+        return cursor.rowcount == 1
+
+
+async def move_category(db: Connection, from_id: int, to_id: int) -> bool:
+    """Переносит операции и платежи в другую категорию и удаляет опустевшую."""
+    await execute(db, "UPDATE transactions SET category_id = ? WHERE category_id = ?", (to_id, from_id))
+    await execute(db, "UPDATE payments SET category_id = ? WHERE category_id = ?", (to_id, from_id))
+    return await delete_category(db, from_id)
+
+
 # --- счета ---
 async def seed_accounts(db: Connection, user_id: int) -> None:
     """Счета по умолчанию; первый становится основным — на него идут новые операции."""
-    if await scalar(db, "SELECT COUNT(*) FROM accounts WHERE user_id = ?", (user_id,)):
-        return
-    ids = [await add_account(db, user_id, name) for name in DEFAULT_ACCOUNTS]
-    await execute(db, "UPDATE settings SET default_account_id = ? WHERE user_id = ?", (ids[0], user_id))
+    # Одним запросом, как и категории: иначе параллельные первые апдейты создают счета дважды.
+    await execute(
+        db,
+        "INSERT INTO accounts (user_id, name) SELECT ?, column1"
+        f" FROM (VALUES {', '.join(['(?)'] * len(DEFAULT_ACCOUNTS))})"
+        " WHERE NOT EXISTS (SELECT 1 FROM accounts WHERE user_id = ?)",
+        (user_id, *DEFAULT_ACCOUNTS, user_id),
+    )
+    await execute(
+        db,
+        "UPDATE settings SET default_account_id = (SELECT MIN(id) FROM accounts WHERE user_id = ?)"
+        " WHERE user_id = ? AND default_account_id IS NULL",
+        (user_id, user_id),
+    )
 
 
 async def accounts(db: Connection, user_id: int, archived: bool = False) -> list[Row]:

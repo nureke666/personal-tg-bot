@@ -1,8 +1,11 @@
 """Репозитории и планировщик на фиксированном времени."""
 
+import asyncio
+import sqlite3
 from datetime import date, timedelta
 
 import aiosqlite
+import pytest
 
 from bot import db as database
 from bot.repo import countdowns, finance, habits, payments, settings, tasks
@@ -257,6 +260,16 @@ async def test_default_categories_seeded_once(db, user):
     assert len(names) == len(set(names)) == len(finance.DEFAULT_CATEGORIES[finance.EXPENSE])
 
 
+async def test_concurrent_first_contact_seeds_defaults_once(db):
+    # Первые апдейты aiogram обрабатывает параллельно: набор по умолчанию не должен создаться дважды.
+    await asyncio.gather(*(settings.ensure(db, OWNER, TZ, NOW) for _ in range(3)))
+    pairs = [(c["kind"], c["name"]) for c in await finance.all_categories(db, OWNER)]
+    assert len(pairs) == len(set(pairs)) == sum(map(len, finance.DEFAULT_CATEGORIES.values()))
+    accounts = await finance.accounts(db, OWNER)
+    assert [a["name"] for a in accounts] == finance.DEFAULT_ACCOUNTS
+    assert (await settings.get(db, OWNER))["default_account_id"] == accounts[0]["id"]
+
+
 async def test_habit_mark_toggles_on_and_off(db, user):
     habit_id = await habits.create(db, OWNER, "🏃 Бег", tu.ALL_DAYS, None, TZ, NOW)
     assert await habits.toggle_mark(db, habit_id, TODAY) is True
@@ -382,6 +395,48 @@ async def test_migration_from_single_user_base_turns_on_morning_list():
         await database.migrate(conn)
         [row] = await conn.execute_fetchall("SELECT morning_on FROM settings")
         assert row[0] == 1
+    finally:
+        await conn.close()
+
+
+async def test_migration_merges_duplicate_categories():
+    conn = await aiosqlite.connect(":memory:", isolation_level=None)
+    conn.row_factory = aiosqlite.Row
+    try:
+        for number, script in enumerate(database.MIGRATIONS[:13], start=1):
+            await conn.executescript(f"BEGIN; {script}; PRAGMA user_version = {number}; COMMIT;")
+        await conn.executescript(
+            """
+            INSERT INTO categories (id, user_id, kind, name, month_limit, archived) VALUES
+                (1, 1, 'expense', 'Еда', NULL, 1), (2, 1, 'expense', 'Еда', 5000, 0),
+                (3, 1, 'expense', 'Еда', NULL, 0), (4, 1, 'expense', 'Другое', NULL, 0),
+                (5, 1, 'income', 'Другое', NULL, 0), (6, 2, 'expense', 'Еда', NULL, 0),
+                (7, 1, 'expense', 'Связь', NULL, 1), (8, 1, 'expense', 'Связь', NULL, 1),
+                (9, 1, 'expense', 'Кафе', 3000, 1), (10, 1, 'expense', 'Кафе', 8000, 0);
+            INSERT INTO transactions (user_id, kind, amount, category_id, op_date, created_at) VALUES
+                (1, 'expense', 100, 2, '2026-01-01', '2026-01-01 00:00:00'),
+                (1, 'expense', 200, 3, '2026-01-01', '2026-01-01 00:00:00'),
+                (1, 'expense', 300, 4, '2026-01-01', '2026-01-01 00:00:00');
+            INSERT INTO payments (user_id, title, amount, category_id, period, due_date) VALUES
+                (1, 'Пицца', 500, 3, 'monthly', '2026-01-01');
+            """
+        )
+        await database.migrate(conn)
+        rows = await conn.execute_fetchall("SELECT id, user_id, kind, name, month_limit, archived FROM categories")
+        assert [tuple(r) for r in rows] == [
+            (1, 1, "expense", "Еда", 5000, 0),  # лимит и видимость — от копий
+            (4, 1, "expense", "Другое", None, 0),
+            (5, 1, "income", "Другое", None, 0),  # тот же текст, но доход — не дубль
+            (6, 2, "expense", "Еда", None, 0),
+            (7, 1, "expense", "Связь", None, 1),  # все копии скрыты — скрыта и оставшаяся
+            (9, 1, "expense", "Кафе", 8000, 0),  # лимит видимой копии важнее лимита скрытой
+        ]
+        ops = await conn.execute_fetchall("SELECT amount, category_id FROM transactions ORDER BY amount")
+        assert [tuple(r) for r in ops] == [(100, 1), (200, 1), (300, 4)]
+        [pay] = await conn.execute_fetchall("SELECT category_id FROM payments")
+        assert pay[0] == 1
+        with pytest.raises(sqlite3.IntegrityError):  # новые дубли не пускает индекс
+            await conn.execute("INSERT INTO categories (user_id, kind, name) VALUES (1, 'expense', 'Еда')")
     finally:
         await conn.close()
 

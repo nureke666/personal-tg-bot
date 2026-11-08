@@ -8,7 +8,7 @@ from bot.keyboards.common import btn, chunks, kb, nav_row
 from bot.repo.finance import EXPENSE, INCOME
 from bot.services import reports
 from bot.services.reports import PERIODS, limit_progress
-from bot.services.texts import bar, clip, esc, fmt_date, fmt_money
+from bot.services.texts import bar, clip, esc, fmt_date, fmt_money, plural
 from bot.services.timeutil import pack_day
 
 KIND_TITLES = {EXPENSE: "Расход", INCOME: "Доход"}
@@ -289,7 +289,7 @@ def categories_view(
 ) -> tuple[str, InlineKeyboardMarkup]:
     other = INCOME if kind == EXPENSE else EXPENSE
     title = "расходов" if kind == EXPENSE else "доходов"
-    text = f"🗂 <b>Категории {title}</b>\nНажми на категорию, чтобы переименовать или скрыть."
+    text = f"🗂 <b>Категории {title}</b>\nНажми на категорию, чтобы переименовать, скрыть или удалить."
     rows = chunks([btn(c["name"], CatCb(act="open", id=c["id"])) for c in active], 2)
     if archived:
         rows += chunks([btn(f"🗄 {c['name']}", CatCb(act="open", id=c["id"])) for c in archived], 2)
@@ -315,8 +315,27 @@ def category_card(category: Mapping) -> tuple[str, InlineKeyboardMarkup]:
     )
     return text, kb(
         [btn("✏️ Переименовать", CatCb(act="rename", id=category["id"])), toggle],
+        [btn("🗑 Удалить", CatCb(act="delete", id=category["id"]))],
         [btn("◀ Категории", FinCb(act="cats", v=category["kind"]))],
     )
+
+
+def category_move_view(
+    category: Mapping, ops: int, pays: int, targets: Sequence[Mapping]
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Удаление категории, в которой есть записи: сначала выбрать, куда их перенести."""
+    used = []
+    if ops:
+        used.append(f"{ops} {plural(ops, ('операция', 'операции', 'операций'))}")
+    if pays:
+        used.append(f"{pays} {plural(pays, ('регулярный платёж', 'регулярных платежа', 'регулярных платежей'))}")
+    text = (
+        f"🗑 <b>Удалить {esc(category['name'])}</b>\n"
+        f"В ней {' и '.join(used)}. Куда их перенести? После переноса категория удалится."
+    )
+    rows = chunks([btn(c["name"], CatCb(act="into", id=c["id"])) for c in targets], 2)
+    rows.append([btn("✖ Отмена", CatCb(act="open", id=category["id"]))])
+    return text, kb(*rows)
 
 
 def export_kb() -> InlineKeyboardMarkup:
