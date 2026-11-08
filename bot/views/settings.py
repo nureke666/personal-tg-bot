@@ -2,10 +2,9 @@ from collections.abc import Mapping
 
 from aiogram.types import InlineKeyboardMarkup
 
-from bot.callbacks import CountdownCb, FinCb, SetCb
+from bot.callbacks import AccCb, CountdownCb, FinCb, SetCb
 from bot.keyboards.common import btn, chunks, kb
 from bot.repo.settings import SCHEDULE_DAYS
-from bot.services.texts import fmt_money
 from bot.services.timeutil import tz_offset_label
 
 TIMEZONES = {
@@ -61,13 +60,12 @@ def settings_view(settings: Mapping) -> tuple[str, InlineKeyboardMarkup]:
             "⚙️ <b>Настройки</b>",
             f"🌍 Часовой пояс: {tz_title(settings['tz'])}",
             f"💱 Валюта: {currency}",
-            f"💼 Начальный баланс: {fmt_money(settings['start_balance'], currency)}",
             *[_schedule_label(settings, key) for key in SCHEDULES],
         ]
     )
     markup = kb(
         [btn("🌍 Часовой пояс", SetCb(act="tz")), btn("💱 Валюта", SetCb(act="cur"))],
-        [btn("💼 Начальный баланс", SetCb(act="balance"))],
+        [btn("👛 Счета и начальные балансы", AccCb(act="list"))],
         *[[btn(_schedule_label(settings, key), SetCb(act="sched", v=key))] for key in SCHEDULES],
         [btn("⏳ Обратные отсчёты", CountdownCb(act="list"))],
         [btn("🎯 Лимиты", FinCb(act="limits")), btn("🗂 Категории", FinCb(act="cats", v="expense"))],
