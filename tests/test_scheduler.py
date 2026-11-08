@@ -547,3 +547,43 @@ async def test_migration_guesses_habit_part_by_reminder_time():
         ]
     finally:
         await conn.close()
+
+
+async def test_owner_hears_about_broken_scheduler_rarely(db, user, fake_bot, monkeypatch):
+    async def broken_tick(*args):
+        raise RuntimeError("база недоступна")
+
+    watchdog = scheduler.Watchdog()
+    monkeypatch.setattr(scheduler, "tick", broken_tick)
+    await scheduler.guarded_tick(fake_bot, db, NOW, OWNER, watchdog)
+    await scheduler.guarded_tick(fake_bot, db, NOW + timedelta(minutes=4), OWNER, watchdog)
+    assert fake_bot.sent == []  # пара упавших тиков — не повод писать
+
+    await scheduler.guarded_tick(fake_bot, db, NOW + timedelta(minutes=5), OWNER, watchdog)
+    await scheduler.guarded_tick(fake_bot, db, NOW + timedelta(minutes=30), OWNER, watchdog)
+    [(chat_id, text, _)] = fake_bot.sent
+    assert chat_id == OWNER and "падает уже 5 минут" in text and "RuntimeError: база недоступна" in text
+
+    monkeypatch.undo()
+    await scheduler.guarded_tick(fake_bot, db, NOW + timedelta(minutes=31), OWNER, watchdog)
+    assert fake_bot.sent[-1][1] == "✅ Планировщик снова работает."
+
+    # Новая серия падений в те же сутки — молчим; через сутки после прошлого сообщения — пишем снова.
+    monkeypatch.setattr(scheduler, "tick", broken_tick)
+    await scheduler.guarded_tick(fake_bot, db, NOW + timedelta(hours=2), OWNER, watchdog)
+    await scheduler.guarded_tick(fake_bot, db, NOW + timedelta(hours=3), OWNER, watchdog)
+    assert len(fake_bot.sent) == 2
+    await scheduler.guarded_tick(fake_bot, db, NOW + timedelta(days=1, minutes=5), OWNER, watchdog)
+    assert len(fake_bot.sent) == 3 and "падает" in fake_bot.sent[-1][1]
+
+
+async def test_short_failure_does_not_report_recovery(db, user, fake_bot, monkeypatch):
+    async def broken_tick(*args):
+        raise RuntimeError("сбой")
+
+    watchdog = scheduler.Watchdog()
+    monkeypatch.setattr(scheduler, "tick", broken_tick)
+    await scheduler.guarded_tick(fake_bot, db, NOW, OWNER, watchdog)
+    monkeypatch.undo()
+    await scheduler.guarded_tick(fake_bot, db, NOW + timedelta(minutes=1), OWNER, watchdog)
+    assert fake_bot.sent == []
