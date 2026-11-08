@@ -250,15 +250,20 @@ async def record_op(
     amount: int,
     category_id: int,
     comment: str | None,
+    account_id: int | None = None,
+    header: str = "✅ Записал",
 ) -> None:
-    """Записывает операцию за сегодня и показывает её карточку с предупреждениями о лимитах."""
+    """Записывает операцию за сегодня и показывает её карточку с предупреждениями о лимитах.
+
+    Счёт — основной из настроек, если не передан другой.
+    """
     uid, currency, today = settings["user_id"], settings["currency"], _today(settings)
     category = await repo.category(db, uid, category_id)
     start, end = reports.month_range(today)
     before_total = await repo.spent(db, uid, start, end)
     before_cat = await repo.spent(db, uid, start, end, category_id)
     op_id = await repo.add_op(
-        db, uid, kind, amount, category_id, comment, today, tu.utcnow(), settings["default_account_id"]
+        db, uid, kind, amount, category_id, comment, today, tu.utcnow(), account_id or settings["default_account_id"]
     )
     sign, title = views.KIND_SIGNS[kind], views.KIND_TITLES[kind]
     entry = f"{sign} {title} {fmt_money(amount, currency)} · {clip(category['name'])}"
@@ -278,7 +283,7 @@ async def record_op(
                 notes.append(alert)
             elif before + amount < limit:
                 notes.append(f"🎯 Осталось {short}: {fmt_money(limit - before - amount, currency)}")
-    await show_op(event, db, settings, op_id, notes, "✅ Записал")
+    await show_op(event, db, settings, op_id, notes, header)
 
 
 @router.callback_query(NavCb.filter(F.action == "back"), StateFilter(FinForm))
