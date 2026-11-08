@@ -71,6 +71,25 @@ docker compose logs -f                        # должно быть «Бот @
 
 Бот перезапускается сам (`restart: unless-stopped`). База лежит в `./data/bot.db`.
 
+### Автодеплой
+
+После каждого влитого в `main` PR GitHub Actions прогоняет проверки, копирует код в папку бота на VPS
+(`.env`, `data/` и другие свои файлы не трогает), делает копию базы `data/before-deploy.db` и
+`docker compose up -d --build`, затем ждёт в логах «Бот … запущен» — иначе прогон красный. Вручную —
+Actions → CI → Run workflow.
+
+Один раз настроить (папка бота на сервере с `docker-compose.yml` и `.env` уже должна быть):
+
+```bash
+ssh-keygen -t ed25519 -N "" -f ~/.ssh/tg_bot_deploy                # ключ только для деплоя
+ssh-copy-id -i ~/.ssh/tg_bot_deploy.pub <user>@<host>
+gh secret set VPS_SSH_KEY < ~/.ssh/tg_bot_deploy
+ssh-keyscan <host> | gh secret set VPS_KNOWN_HOSTS
+gh secret set VPS_HOST --body <host>
+gh secret set VPS_USER --body <user>                               # в группе docker
+gh secret set VPS_PATH --body /home/<user>/tg_bot                  # абсолютный путь
+```
+
 ## Бэкап
 
 Каждую ночь в 03:00 бот без звука присылает владельцу файл базы `bot-ГГГГ-ММ-ДД.db`. Время меняется, бэкап
