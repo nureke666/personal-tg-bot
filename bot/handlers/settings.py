@@ -9,7 +9,7 @@ from bot.callbacks import NavCb, SetCb, TimeCb
 from bot.handlers.ui import show
 from bot.keyboards import timepicker
 from bot.keyboards.common import btn, kb
-from bot.repo import habits, journal
+from bot.repo import journal
 from bot.repo import settings as repo
 from bot.services import backup, morning
 from bot.services import timeutil as tu
@@ -90,13 +90,13 @@ async def settings_action(
     elif act == "morningnow":
         tz = settings["tz"]
         today = tu.local_today(tz)
-        if not await habits.planned(db, uid, today):
-            callback_answer.text = "На сегодня привычек нет"
+        if not await morning.has_plan(db, uid, today):
+            callback_answer.text = "На сегодня ни привычек, ни задач"
             return
         text, markup = await morning.screen(db, uid, tz, today, today)
         sent = await callback.message.answer(text, reply_markup=markup)
         await morning.replace_pin(callback.bot, db, settings, sent.message_id, today)
-        callback_answer.text = "Список на сегодня закреплён"
+        callback_answer.text = "План на сегодня закреплён"
     elif act == "time" and value in schedules:
         await state.set_state(SettingsForm.time)
         await state.update_data(key=value)

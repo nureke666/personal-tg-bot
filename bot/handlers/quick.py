@@ -20,7 +20,7 @@ from bot.handlers.ui import show
 from bot.repo import finance as finance_repo
 from bot.repo import journal
 from bot.repo import tasks as tasks_repo
-from bot.services import quick, smart_task
+from bot.services import morning, quick, smart_task
 from bot.services import timeutil as tu
 from bot.services.texts import quote
 from bot.views import tasks as task_views
@@ -87,6 +87,7 @@ async def quick_action(
     draft = {"title": text[:200], "due_date": due.isoformat() if due else None, "offsets": [0] if due else []}
     task_id = await tasks_repo.create(db, settings["user_id"], draft, settings["tz"], tu.utcnow())
     await journal.add(db, settings["user_id"], f"📋 Новая задача {quote(draft['title'])}")
+    await morning.refresh(callback.bot, db, settings["user_id"])
     await tasks.show_card(callback, db, settings, task_id, "✅ Задача сохранена")
 
 
@@ -100,4 +101,5 @@ async def save_guessed_task(message: Message, db: Connection, settings: Row, gue
     }
     task_id = await tasks_repo.create(db, settings["user_id"], draft, settings["tz"], tu.utcnow())
     await journal.add(db, settings["user_id"], f"📋 Новая задача {quote(draft['title'])}")
+    await morning.refresh(message.bot, db, settings["user_id"])
     await tasks.show_card(message, db, settings, task_id, "✅ Задача сохранена — понял из текста, поправь, если не так")

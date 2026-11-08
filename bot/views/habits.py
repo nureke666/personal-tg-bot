@@ -56,7 +56,7 @@ def numbers(habits: Sequence[Mapping]) -> dict[int, int]:
 
 def _header(view: str, day: date, today: date) -> str:
     if view == MORNING:
-        return f"🌅 <b>Привычки · {fmt_day(day)}</b>"
+        return f"🌅 <b>План · {fmt_day(day)}</b>"
     if view == EVENING:
         return CHECKIN_HEADER
     return f"✅ <b>Привычки — {fmt_date(day, today)}</b>"
@@ -90,7 +90,8 @@ def day_view(
     parts = [(part, items) for part in PARTS if (items := [h for h in planned if h["part"] == part])]
     quits = [h for h in habits if h["kind"] == QUIT] if day == today else []
     lines = [header or _header(view, day, today)]
-    if not habits:
+    # В закрепе ниже ещё задачи, а кнопки «добавить» нет — подсказки о пустом списке там не нужны.
+    if not habits and view != MORNING:
         lines.append("Пока нет ни одной привычки. Добавь первую 👇")
     elif planned:
         done = sum(h["id"] in marked for h in planned)
@@ -99,7 +100,7 @@ def day_view(
         for part, items in parts:
             lines += ["", f"<b>{part_title(part)}</b>"]
             lines += [_habit_line(number[h["id"]], h, h["id"] in marked, counters.get(h["id"], 0)) for h in items]
-    elif not quits:
+    elif not quits and habits and view != MORNING:
         lines.append("На этот день привычек не назначено.")
     if quits and view == MORNING:
         lines.append("")

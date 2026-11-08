@@ -224,7 +224,7 @@ async def morning_lists(out: Outbox, db: Connection, now: datetime) -> None:
         if user["morning_next_at"] is not None and uid == out.owner_id:
             today = tu.local_today(tz, now)
             message = None
-            if await habits.planned(db, uid, today):
+            if await morning.has_plan(db, uid, today):
                 handled, message = await out.send_message(uid, *await morning.screen(db, uid, tz, today, today))
                 if not handled:
                     continue

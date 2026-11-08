@@ -190,7 +190,7 @@ async def test_morning_list_is_pinned_instead_of_yesterdays(db, user, fake_bot):
     sunday_6am = NOW + timedelta(hours=22)  # 18-е, 06:00 по Алматы
     await scheduler.tick(fake_bot, db, sunday_6am, OWNER)
     [(_, text, markup)] = [m for m in fake_bot.sent if m[1].startswith("🌅")]
-    assert text.startswith("🌅 <b>Привычки · вс, 18 окт</b>")
+    assert text.startswith("🌅 <b>План · вс, 18 окт</b>")
     assert "1. ⬜ 📚 Чтение · ⏰ 21:00" in text and "3. ⬜ 💧 Вода" in text and "Английский" not in text
     # Привычка «по будням» в воскресенье пропускается, её номер не достаётся соседке.
     assert _labels(markup) == ["🌅", "1", "3"]
@@ -204,6 +204,18 @@ async def test_morning_list_is_pinned_instead_of_yesterdays(db, user, fake_bot):
     assert fake_bot.unpinned == [(OWNER, first_id)]
     second_id = fake_bot.pinned[-1][1]
     assert second_id != first_id and (await settings.get(db, OWNER))["morning_msg_id"] == second_id
+
+
+async def test_morning_list_pins_tasks_even_without_habits(db, user, fake_bot):
+    await _task(db, title="Купить хлеб", due_date="2026-10-18", due_time="10:00")
+    await _task(db, title="Оплатить интернет", due_date="2026-10-17", due_time=None)  # вчерашняя, не сделана
+    await _task(db, title="Позвонить в банк", due_date="2026-10-19")  # завтрашняя в план не попадает
+    await scheduler.tick(fake_bot, db, NOW + timedelta(hours=22), OWNER)  # воскресенье, 06:00
+    [(_, text, markup)] = [m for m in fake_bot.sent if m[1].startswith("🌅")]
+    assert "<b>📋 Задачи</b>\n• 10:00 — Купить хлеб" in text
+    assert "⚠️ Просрочено: 1" in text and "Оплатить интернет" in text and "Позвонить в банк" not in text
+    assert "привыч" not in text.lower() and _labels(markup) == []  # про пустые привычки ни слова
+    assert len(fake_bot.pinned) == 1
 
 
 async def test_morning_list_skips_free_day_but_unpins_yesterdays(db, user, fake_bot):
