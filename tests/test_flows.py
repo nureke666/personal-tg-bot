@@ -537,9 +537,9 @@ async def test_morning_list_pinned_from_settings_and_kept_in_sync(db, harness, u
     water = await habits.create(db, OWNER, "💧 Вода", tu.ALL_DAYS, None, TZ, tu.utcnow())
     read = await habits.create(db, OWNER, "📚 Чтение", tu.ALL_DAYS, "21:00", TZ, tu.utcnow())
     await harness.click(SetCb(act="sched", v="morning"))
-    assert "Привычки на день" in harness.text
+    assert "План на день" in harness.text
     await harness.click(SetCb(act="morningnow"))
-    assert harness.toasts[-1] == "Список на сегодня закреплён"
+    assert harness.toasts[-1] == "План на сегодня закреплён"
     assert harness.text.startswith("🌅") and harness.labels == ["🌅", "1", "2"]  # в закрепе никакой навигации
     pinned = (await settings.get(db, OWNER))["morning_msg_id"]
     [pin] = harness.calls(PinChatMessage)
@@ -565,7 +565,28 @@ async def test_morning_list_pinned_from_settings_and_kept_in_sync(db, harness, u
 
 async def test_morning_list_now_without_habits(db, harness, user):
     await harness.click(SetCb(act="morningnow"))
-    assert harness.toasts[-1] == "На сегодня привычек нет" and not harness.calls(PinChatMessage)
+    assert harness.toasts[-1] == "На сегодня ни привычек, ни задач" and not harness.calls(PinChatMessage)
+
+
+async def test_pin_shows_tasks_and_follows_their_changes(db, harness, user):
+    await habits.create(db, OWNER, "💧 Вода", tu.ALL_DAYS, None, TZ, tu.utcnow())
+    await harness.click(SetCb(act="morningnow"))
+    pinned = (await settings.get(db, OWNER))["morning_msg_id"]
+    assert "📋 Задачи" not in harness.text  # задач нет — и раздела нет
+
+    # Новая задача на сегодня из быстрого ввода появляется в закрепе.
+    await harness.send("позвонить маме")
+    await harness.click(harness.button("На сегодня"))
+
+    def pin_text():
+        return [e for e in harness.calls(EditMessageText) if e.message_id == pinned][-1].text
+
+    assert "1. ⬜ 💧 Вода" in pin_text() and "<b>📋 Задачи</b>\n• весь день — позвонить маме" in pin_text()
+    [task] = await tasks.list_view(db, OWNER, "today", today(), "00:00")
+
+    # Выполнил — из закрепа ушла.
+    await harness.click(TaskCb(act="done", id=task["id"]))
+    assert "позвонить маме" not in pin_text() and "📋 Задачи" not in pin_text()
 
 
 async def test_pin_service_message_is_ignored(db, harness, user):

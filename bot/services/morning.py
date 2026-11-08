@@ -1,4 +1,4 @@
-"""Утренний список привычек, закреплённый в чате.
+"""Утренний план на день — привычки и задачи, закреплённый в чате.
 
 В настройках помним, какое сообщение закреплено и за какой день: отметки из меню или из напоминания
 перерисовывают закреп, чтобы он не отставал. Закреп — удобство, поэтому ошибки Telegram (сообщение
@@ -14,15 +14,25 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.types import InlineKeyboardMarkup
 from aiosqlite import Connection, Row
 
-from bot.repo import settings
+from bot.repo import habits, settings
 from bot.services import timeutil as tu
 from bot.views import habits as views
+from bot.views import tasks as task_views
 
 log = logging.getLogger(__name__)
 
 
+async def has_plan(db: Connection, user_id: int, day: date) -> bool:
+    """Есть что закрепить: привычки на день, задачи на день или просроченные."""
+    return bool(await habits.planned(db, user_id, day) or any(await task_views.plan_tasks(db, user_id, day)))
+
+
 async def screen(db: Connection, user_id: int, tz: str, day: date, today: date) -> tuple[str, InlineKeyboardMarkup]:
-    return await views.day_screen(db, user_id, tz, day, today, view=views.MORNING)
+    text, markup = await views.day_screen(db, user_id, tz, day, today, view=views.MORNING)
+    lines = task_views.pin_lines(*await task_views.plan_tasks(db, user_id, day), day)
+    if not lines and not await habits.planned(db, user_id, day):
+        lines = ["🎉 На сегодня всё сделано."]  # закреп был ради задач, и их не осталось
+    return "\n".join([text, *lines]), markup
 
 
 async def replace_pin(
@@ -41,7 +51,8 @@ async def replace_pin(
 
 
 async def refresh(bot: Bot, db: Connection, user_id: int, pressed_message_id: int | None = None) -> None:
-    """Перерисовывает закреп после изменений в привычках. Если нажали прямо на нём, он уже перерисован."""
+    """Перерисовывает закреп после изменений в привычках и задачах. Если нажали прямо на нём, он уже
+    перерисован."""
     user = await settings.get(db, user_id)
     message_id = user["morning_msg_id"]
     if not message_id or message_id == pressed_message_id:

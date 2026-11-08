@@ -26,6 +26,7 @@ from bot.keyboards.calendar import FUTURE, calendar_kb, picked_date
 from bot.keyboards.common import btn, confirm_kb, kb, nav_row
 from bot.repo import journal
 from bot.repo import tasks as tasks_repo
+from bot.services import morning
 from bot.services import timeutil as tu
 from bot.services.texts import esc, fmt_date, quote
 from bot.views import tasks as views
@@ -172,6 +173,7 @@ async def advance(event: Message | CallbackQuery, state: FSMContext, db: Connect
     if step == "card":
         await tasks_repo.update(db, data["edit_id"], draft, settings["tz"], tu.utcnow())
         await journal.add(db, settings["user_id"], f"✏️ Задача {quote(draft['title'])}: {EDITED[done]}")
+        await morning.refresh(event.bot, db, settings["user_id"])
         await state.clear()
         await show_card(event, db, settings, data["edit_id"], "✅ Сохранено")
         return
@@ -280,6 +282,7 @@ async def save(callback: CallbackQuery, state: FSMContext, db: Connection, setti
     draft = await _draft(state)
     task_id = await tasks_repo.create(db, settings["user_id"], draft, settings["tz"], tu.utcnow())
     await journal.add(db, settings["user_id"], f"📋 Новая задача {quote(draft['title'])}")
+    await morning.refresh(callback.bot, db, settings["user_id"])
     await state.clear()
     await show_card(callback, db, settings, task_id, "✅ Задача сохранена")
 
@@ -342,12 +345,14 @@ async def task_action(
     elif act == "done":
         next_date = await tasks_repo.complete(db, task, tz, now)
         await journal.add(db, task["user_id"], f"✅ Выполнена задача {quote(task['title'])}")
+        await morning.refresh(callback.bot, db, task["user_id"])
         header = f"✅ Готово! Следующий раз: {fmt_date(next_date, _today(settings))}" if next_date else "✅ Выполнено!"
         callback_answer.text = "Готово ✅"
         await show_card(callback, db, settings, task_id, header)
     elif act == "undo":
         await tasks_repo.reopen(db, task, tz, now)
         await journal.add(db, task["user_id"], f"↩️ Задача {quote(task['title'])} снова в работе")
+        await morning.refresh(callback.bot, db, task["user_id"])
         await show_card(callback, db, settings, task_id, "↩️ Задача снова в работе")
     elif act == "move":
         draft = tasks_repo.to_draft(task, await tasks_repo.offsets(db, task_id))
@@ -364,6 +369,7 @@ async def task_action(
     elif act == "delok":
         await tasks_repo.delete(db, task_id)
         await journal.add(db, task["user_id"], f"🗑 Удалена задача {quote(task['title'])}")
+        await morning.refresh(callback.bot, db, task["user_id"])
         await show(callback, "🗑 Задача удалена.", BACK_TO_TASKS)
 
 
@@ -392,6 +398,7 @@ async def reminder_action(
     if callback_data.act == "done":
         next_date = await tasks_repo.complete(db, task, tz, now)
         await journal.add(db, task["user_id"], f"✅ Выполнена задача {quote(task['title'])}")
+        await morning.refresh(callback.bot, db, task["user_id"])
         note = "✅ Сделано"
         if next_date:
             note += f". Следующий раз: {fmt_date(next_date, today)}"

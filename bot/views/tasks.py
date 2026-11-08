@@ -2,7 +2,7 @@ from collections.abc import Mapping, Sequence
 from datetime import date, datetime
 
 from aiogram.types import InlineKeyboardMarkup
-from aiosqlite import Connection
+from aiosqlite import Connection, Row
 
 from bot.callbacks import (
     DateQuickCb,
@@ -230,10 +230,25 @@ def digest_message(today_tasks: Sequence[Mapping], overdue: Sequence[Mapping], t
     return "\n".join(lines)
 
 
+async def plan_tasks(db: Connection, user_id: int, day: date) -> tuple[list[Row], list[Row]]:
+    """Открытые задачи на день и просроченные с прошлых дней — для утренней сводки и закрепа."""
+    today_tasks = await tasks_repo.list_view(db, user_id, "today", day, "00:00")
+    overdue = await tasks_repo.list_view(db, user_id, "overdue", day, "00:00")
+    return today_tasks, [t for t in overdue if t["due_date"] < day.isoformat()]
+
+
+def pin_lines(today_tasks: Sequence[Mapping], overdue: Sequence[Mapping], day: date) -> list[str]:
+    """Задачи под привычками в закрепе; пустых разделов нет."""
+    lines = []
+    if today_tasks:
+        lines += ["", "<b>📋 Задачи</b>"]
+        lines += [f"• {t['due_time'] or 'весь день'} — {esc(t['title'])}" for t in today_tasks]
+    if overdue:
+        lines += ["", f"<b>⚠️ Просрочено: {len(overdue)}</b>"]
+        lines += [f"• {when_text(t['due_date'], t['due_time'], day)} — {esc(t['title'])}" for t in overdue[:10]]
+    return lines
+
+
 async def digest_screen(db: Connection, user_id: int, tz: str, now: datetime) -> str | None:
-    local = tu.local_now(tz, now)
-    today, now_hm = local.date(), local.strftime("%H:%M")
-    today_tasks = await tasks_repo.list_view(db, user_id, "today", today, now_hm)
-    overdue = await tasks_repo.list_view(db, user_id, "overdue", today, now_hm)
-    earlier = [t for t in overdue if t["due_date"] < today.isoformat()]
-    return digest_message(today_tasks, earlier, today)
+    today = tu.local_today(tz, now)
+    return digest_message(*await plan_tasks(db, user_id, today), today)
