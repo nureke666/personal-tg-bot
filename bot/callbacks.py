@@ -69,8 +69,24 @@ class FinCb(CallbackData, prefix="fn"):
     id: int = 0
 
 
+class AccCb(CallbackData, prefix="acc"):
+    # list / open / new / rename / start / default / archive / restore
+    # transfer / tfrom / tto — новый перевод, transfers / tdel / tdelok — список и удаление
+    act: str
+    id: int = 0
+    v: str = ""
+
+
+class PayCb(CallbackData, prefix="pay"):
+    # list / new / cat / period / open / paid / snooze / skip / amount / del / delok
+    act: str
+    id: int = 0
+    d: int = 0  # дата платежа, к которой относится кнопка (pack_day): защита от старых напоминаний
+    v: str = ""
+
+
 class OpCb(CallbackData, prefix="op"):
-    act: str  # open / date / setdate / cat / setcat / del / delok
+    act: str  # open / date / setdate / cat / setcat / acc / setacc / del / delok
     id: int = 0
     v: str = ""
 

@@ -1,11 +1,12 @@
 """Сквозные сценарии: апдейты идут через настоящий Dispatcher, Bot API подменён записью вызовов."""
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from aiogram.methods import EditMessageText, PinChatMessage, UnpinChatMessage
 from aiogram.types import Chat, Message, Update, User
 
 from bot.callbacks import (
+    AccCb,
     CalCb,
     CatCb,
     CountdownCb,
@@ -16,6 +17,7 @@ from bot.callbacks import (
     NavCb,
     OpCb,
     PartCb,
+    PayCb,
     RemindCb,
     RepeatCb,
     SetCb,
@@ -27,7 +29,7 @@ from bot.callbacks import (
     TimeCb,
 )
 from bot.keyboards.common import MENU_FINANCE, MENU_SUMMARY
-from bot.repo import countdowns, finance, habits, settings, tasks
+from bot.repo import countdowns, finance, habits, payments, settings, tasks
 from bot.services import timeutil as tu
 from tests.conftest import OWNER, TZ
 
@@ -80,6 +82,22 @@ async def test_create_task_wizard(db, harness):
     assert task["due_time"] == "18:00" and task["repeat"] == "daily"
     assert await tasks.offsets(db, task["id"]) == [0, 60]
     assert await tasks.pending_reminders(db, task["id"]) == 2
+
+
+async def test_wizard_survives_restart(db, make_harness):
+    before = make_harness()
+    await before.click(TaskListCb(view="new"))
+    await before.send("Купить хлеб")
+    await before.close()  # бот перезапустили посреди мастера
+
+    after = make_harness()
+    await after.click(NavCb(action="skip"))
+    await after.click(DateQuickCb(v="none"))
+    await after.click(NavCb(action="save"))
+    assert "Задача сохранена" in after.text
+    [task] = await _all_tasks(db)
+    assert task["title"] == "Купить хлеб"
+    assert await db.execute_fetchall("SELECT * FROM fsm") == []  # закончил мастер — строка убрана
 
 
 async def test_task_without_date_skips_time_and_reminders(db, harness):
@@ -330,9 +348,64 @@ async def test_settings_timezone_and_schedule(db, harness, user):
     await harness.click(TimeCb(action="pick", kind="p", h=22, m=15))
     assert (await settings.get(db, OWNER))["checkin_time"] == "22:15"
 
-    await harness.click(SetCb(act="balance"))
-    await harness.send("-5000")
-    assert (await settings.get(db, OWNER))["start_balance"] == -500_000
+
+async def test_accounts_balances_transfer_and_default(db, harness, user):
+    card, cash = await finance.accounts(db, OWNER)
+    assert user["default_account_id"] == card["id"]
+    await harness.click(AccCb(act="start", id=card["id"]))
+    await harness.send("100000")
+    assert (await finance.account(db, OWNER, card["id"]))["start_balance"] == 10_000_000
+
+    await harness.click(FinCb(act="add", v="expense"))
+    await harness.send("1500")
+    await harness.click(harness.button("Еда"))
+    await harness.click(NavCb(action="skip"))
+    assert "✅ Записал" in harness.text and "💳 Карта" in harness.text  # основной счёт
+
+    await harness.click(AccCb(act="transfer"))
+    await harness.click(AccCb(act="tfrom", id=card["id"]))
+    await harness.click(AccCb(act="tto", id=cash["id"], v=str(card["id"])))
+    await harness.send("20000")
+    assert "✅ 🔁 Перевод" in harness.text
+    balances = await finance.account_balances(db, OWNER)
+    assert balances == {card["id"]: 10_000_000 - 150_000 - 2_000_000, cash["id"]: 2_000_000}
+    assert await finance.balance(db, OWNER) == 10_000_000 - 150_000  # перевод общую сумму не меняет
+    assert await finance.totals(db, OWNER, None, None) == (0, 150_000)  # и в доходы/расходы не попадает
+
+    await harness.click(AccCb(act="archive", id=card["id"]))
+    assert harness.toasts[-1] == "Основной счёт скрыть нельзя"
+    await harness.click(AccCb(act="default", id=cash["id"]))
+    assert (await settings.get(db, OWNER))["default_account_id"] == cash["id"]
+    await harness.send("700 кофе")
+    await harness.click(harness.button("Еда"))
+    [op] = [o for o in await finance.recent_ops(db, OWNER, 0, 10) if o["comment"] == "кофе"]
+    assert op["account"] == "💵 Наличные"
+
+    await harness.click(OpCb(act="setacc", id=op["id"], v=str(card["id"])))
+    assert "👛 Счёт изменён" in harness.text and (await finance.op(db, OWNER, op["id"]))["account_id"] == card["id"]
+
+    await harness.click(AccCb(act="transfers"))
+    [transfer] = await finance.recent_transfers(db, OWNER)
+    await harness.click(AccCb(act="tdel", id=transfer["id"]))
+    await harness.click(AccCb(act="tdelok", id=transfer["id"]))
+    assert "Перевод удалён" in harness.text and await finance.recent_transfers(db, OWNER) == []
+    assert (await finance.account_balances(db, OWNER))[cash["id"]] == 0
+
+    await harness.click(AccCb(act="new"))
+    await harness.send("Kaspi <Gold>")
+    assert "Kaspi &lt;Gold&gt;" in harness.text  # имя экранируется
+    gold = (await finance.accounts(db, OWNER))[-1]
+    await harness.click(AccCb(act="transfer"))
+    await harness.click(AccCb(act="tfrom", id=card["id"]))
+    await harness.click(AccCb(act="tto", id=gold["id"], v=str(card["id"])))
+    await harness.send("100")
+    assert "Kaspi &lt;Gold&gt;" in harness.text and "<Gold>" not in harness.text
+
+    await harness.click(AccCb(act="new"))
+    await harness.send("🏦 Депозит")
+    assert "🏦 Депозит" in harness.text and len(await finance.accounts(db, OWNER)) == 4
+    await harness.click(FinCb(act="menu"))
+    assert "🏦 Депозит" in harness.text and "💵 Наличные" in harness.text
 
 
 async def test_backup_from_settings(db, harness, user):
@@ -509,12 +582,29 @@ async def test_quick_text_becomes_task(db, harness, user):
 
 
 async def test_quick_amount_text_can_be_a_task(db, harness, user):
-    await harness.send("позвонить в 15")  # похоже на сумму, но это задача
+    await harness.send("позвонить 15")  # похоже на сумму, но это задача
     await harness.click(harness.button("Это задача"))
     await harness.click(harness.button("Без даты"))
     [task] = await _all_tasks(db)
-    assert task["title"] == "позвонить в 15" and task["due_date"] is None
+    assert task["title"] == "позвонить 15" and task["due_date"] is None
     assert await _ops(db) == []
+
+
+async def test_quick_phrase_with_date_becomes_task_at_once(db, harness, user):
+    await harness.send("завтра в 10 позвонить маме")
+    assert "Задача сохранена" in harness.text
+    [task] = await _all_tasks(db)
+    assert task["title"] == "Позвонить маме" and task["due_date"] == (today() + timedelta(days=1)).isoformat()
+    assert task["due_time"] == "10:00" and task["repeat"] == "none"
+    assert await tasks.pending_reminders(db, task["id"]) == 1
+
+    await harness.send("каждый понедельник спортзал в 19")
+    gym = (await _all_tasks(db))[-1]
+    assert gym["title"] == "Спортзал" and gym["repeat"] == "weekly" and gym["due_time"] == "19:00"
+    assert date.fromisoformat(gym["due_date"]).weekday() == 0
+
+    await harness.send("1500 такси")  # сумма без даты — по-прежнему расход
+    assert "Категория?" in harness.text and len(await _all_tasks(db)) == 2
 
 
 async def test_change_operation_category(db, harness, user):
@@ -529,3 +619,47 @@ async def test_change_operation_category(db, harness, user):
 async def test_stale_button_gets_a_hint(db, harness):
     await harness.click(NavCb(action="save"))
     assert "устарела" in harness.toasts[-1]
+
+
+async def test_regular_payment_wizard_paid_and_skip(db, harness, user):
+    due = today() + timedelta(days=3)
+    await harness.click(PayCb(act="new"))
+    await harness.send("🏠 Аренда")
+    await harness.send("150000")
+    await harness.click(harness.button("Жильё"))
+    await harness.click(PayCb(act="period", v="monthly"))
+    await harness.click(CalCb(action="pick", mode="f", y=due.year, m=due.month, d=due.day))
+    assert "✅ Платёж добавлен" in harness.text and "🏠 Аренда" in harness.text
+    [payment] = await payments.list_all(db, OWNER)
+    assert payment["amount"] == 15_000_000 and payment["due_date"] == due.isoformat()
+    assert payment["account"] == "💳 Карта" and payment["anchor_day"] == due.day
+
+    await harness.click(PayCb(act="paid", id=payment["id"], d=tu.pack_day(due)))
+    assert "✅ Записал. Следующий платёж" in harness.text
+    [op] = await finance.recent_ops(db, OWNER, 0, 10)
+    assert (op["amount"], op["comment"], op["category"], op["account"]) == (
+        15_000_000,
+        "🏠 Аренда",
+        "🏠 Жильё",
+        "💳 Карта",
+    )
+    after = (await payments.get(db, OWNER, payment["id"]))["due_date"]
+    assert after == payments.next_due(due, "monthly", due.day).isoformat()
+
+    # Кнопка со старого напоминания не записывает расход второй раз.
+    await harness.click(PayCb(act="paid", id=payment["id"], d=tu.pack_day(due)))
+    assert harness.toasts[-1] == "Этот платёж уже отмечен" and await finance.count_ops(db, OWNER) == 1
+
+    await harness.click(PayCb(act="skip", id=payment["id"], d=tu.pack_day(date.fromisoformat(after))))
+    assert "пропущен" in harness.text and await finance.count_ops(db, OWNER) == 1
+
+
+async def test_double_tap_on_paid_records_once(db, harness, user):
+    import asyncio
+
+    housing = next(c for c in await finance.categories(db, OWNER, "expense") if "Жильё" in c["name"])
+    pid = await payments.create(db, OWNER, "🏠 Аренда", 15_000_000, housing["id"], None, "monthly", today(), TZ)
+    button = PayCb(act="paid", id=pid, d=tu.pack_day(today()))
+    await asyncio.gather(harness.click(button), harness.click(button))  # нажал дважды, пока не было ответа
+    assert await finance.count_ops(db, OWNER) == 1
+    assert "Этот платёж уже отмечен" in harness.toasts

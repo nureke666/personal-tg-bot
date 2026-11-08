@@ -62,7 +62,8 @@ uv run ruff check . && uv run ruff format --check . && uv run pytest
 
 ## Границы
 
-- В `main` напрямую не пушим — только PR.
+- В `main` напрямую не пушим — только PR. Влитый в `main` PR сразу уезжает в прод: job `deploy` в
+  `.github/workflows/ci.yml` копирует код на VPS и перезапускает контейнер.
 - Не запускать бота локально с боевым токеном, пока он работает на VPS: Telegram отдаёт апдейты
   только одному экземпляру.
 - `data/bot.db` — живые данные владельца, в git не попадает.
@@ -115,6 +116,9 @@ uv run ruff check . && uv run ruff format --check . && uv run pytest
 | Всё, что бот шлёт сам по расписанию | `bot/services/scheduler.py:tick` |
 | Обработчики по разделам / тексты и клавиатуры экранов / SQL | `bot/handlers/`, `bot/views/`, `bot/repo/` |
 | Данные кнопок | `bot/callbacks.py` |
+| Состояние мастеров (FSM) в SQLite | `bot/storage.py:SQLiteStorage` |
+| Счета, переводы, баланс | `bot/repo/finance.py:account_balances` |
+| Регулярные платежи | `bot/repo/payments.py`, `bot/handlers/payments.py` |
 | Время: UTC в базе, локальное на экране, повторы | `bot/services/timeutil.py` |
 | Быстрый ввод «1500 такси» | `bot/services/quick.py`, `bot/handlers/quick.py` |
 | Сквозные тесты через настоящий Dispatcher | `tests/conftest.py:Harness` |

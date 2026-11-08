@@ -9,7 +9,7 @@ from aiogram.types import BufferedInputFile, CallbackQuery, Message
 from aiogram.utils.callback_answer import CallbackAnswer
 from aiosqlite import Connection, Row
 
-from bot.callbacks import CalCb, CatCb, FinCb, NavCb, OpCb
+from bot.callbacks import AccCb, CalCb, CatCb, FinCb, NavCb, OpCb
 from bot.handlers.ui import show
 from bot.keyboards.calendar import PAST, calendar_kb, picked_date
 from bot.keyboards.common import btn, confirm_kb, kb, nav_row
@@ -36,6 +36,12 @@ class FinForm(StatesGroup):
     cat_name = State()
 
 
+class AccForm(StatesGroup):
+    name = State()
+    start = State()
+    transfer_amount = State()
+
+
 def _today(settings: Row) -> date:
     return tu.local_today(settings["tz"])
 
@@ -49,11 +55,16 @@ def _op_name(kind: str, amount: int, category: str, currency: str) -> str:
 async def open_menu(event: Message | CallbackQuery, db: Connection, settings: Row) -> None:
     uid, today = settings["user_id"], _today(settings)
     start, end = reports.month_range(today)
-    balance = await repo.balance(db, uid, settings["start_balance"])
+    balance = await repo.balance(db, uid)
+    balances = await repo.account_balances(db, uid)
+    accounts = [(a["name"], balances.get(a["id"], 0)) for a in await repo.accounts(db, uid)]
     income, expense = await repo.totals(db, uid, start, end)
     month_title = f"{MONTHS[today.month - 1]} {today.year}"
     await show(
-        event, *views.finance_menu(balance, income, expense, month_title, settings["month_limit"], settings["currency"])
+        event,
+        *views.finance_menu(
+            balance, accounts, income, expense, month_title, settings["month_limit"], settings["currency"]
+        ),
     )
 
 
@@ -239,14 +250,21 @@ async def record_op(
     amount: int,
     category_id: int,
     comment: str | None,
+    account_id: int | None = None,
+    header: str = "✅ Записал",
 ) -> None:
-    """Записывает операцию за сегодня и показывает её карточку с предупреждениями о лимитах."""
+    """Записывает операцию за сегодня и показывает её карточку с предупреждениями о лимитах.
+
+    Счёт — основной из настроек, если не передан другой.
+    """
     uid, currency, today = settings["user_id"], settings["currency"], _today(settings)
     category = await repo.category(db, uid, category_id)
     start, end = reports.month_range(today)
     before_total = await repo.spent(db, uid, start, end)
     before_cat = await repo.spent(db, uid, start, end, category_id)
-    op_id = await repo.add_op(db, uid, kind, amount, category_id, comment, today, tu.utcnow())
+    op_id = await repo.add_op(
+        db, uid, kind, amount, category_id, comment, today, tu.utcnow(), account_id or settings["default_account_id"]
+    )
     sign, title = views.KIND_SIGNS[kind], views.KIND_TITLES[kind]
     entry = f"{sign} {title} {fmt_money(amount, currency)} · {clip(category['name'])}"
     await journal.add(db, uid, entry + (f" — {clip(comment)}" if comment else ""))
@@ -265,7 +283,7 @@ async def record_op(
                 notes.append(alert)
             elif before + amount < limit:
                 notes.append(f"🎯 Осталось {short}: {fmt_money(limit - before - amount, currency)}")
-    await show_op(event, db, settings, op_id, notes, "✅ Записал")
+    await show_op(event, db, settings, op_id, notes, header)
 
 
 @router.callback_query(NavCb.filter(F.action == "back"), StateFilter(FinForm))
@@ -306,6 +324,16 @@ async def op_action(
             name = _op_name(op["kind"], op["amount"], op["category"], settings["currency"])
             await journal.add(db, settings["user_id"], f"🗂 {name} → {clip(category['name'])}")
         await show_op(callback, db, settings, op["id"], header="🗂 Категория изменена")
+    elif act == "acc":
+        accounts = await repo.accounts(db, settings["user_id"])
+        await show(callback, "👛 <b>С какого счёта?</b>", views.op_account_kb(op["id"], accounts))
+    elif act == "setacc":
+        account = await repo.account(db, settings["user_id"], int(callback_data.v or 0))
+        if account and not account["archived"]:
+            await repo.set_op_account(db, op["id"], account["id"])
+            name = _op_name(op["kind"], op["amount"], op["category"], settings["currency"])
+            await journal.add(db, settings["user_id"], f"👛 {name} → {quote(account['name'])}")
+        await show_op(callback, db, settings, op["id"], header="👛 Счёт изменён")
     elif act == "setdate" and callback_data.v == "cal":
         await state.set_state(FinForm.op_date)
         await state.update_data(op_id=op["id"])
@@ -459,6 +487,191 @@ async def got_category_name(message: Message, state: FSMContext, db: Connection,
         kind = "расходов" if data["kind"] == repo.EXPENSE else "доходов"
         await journal.add(db, uid, f"🗂 Новая категория {kind} {quote(name)}")
     await show_categories(message, db, settings, data["kind"])
+
+
+# --- счета ---
+async def show_accounts(
+    event: Message | CallbackQuery, db: Connection, settings: Row, header: str | None = None
+) -> None:
+    uid = settings["user_id"]
+    active, archived = await repo.accounts(db, uid), await repo.accounts(db, uid, archived=True)
+    balances = await repo.account_balances(db, uid)
+    text, markup = views.accounts_view(active, archived, balances, settings["default_account_id"], settings["currency"])
+    await show(event, f"{header}\n\n{text}" if header else text, markup)
+
+
+async def show_account(event: Message | CallbackQuery, db: Connection, settings: Row, account_id: int) -> None:
+    uid = settings["user_id"]
+    account = await repo.account(db, uid, account_id)
+    if not account:
+        await show(event, "Счёт не найден.", BACK_TO_FINANCE)
+        return
+    balance = (await repo.account_balances(db, uid)).get(account_id, 0)
+    is_default = account_id == settings["default_account_id"]
+    await show(event, *views.account_card(account, balance, is_default, settings["currency"]))
+
+
+@router.callback_query(AccCb.filter())
+async def account_action(
+    callback: CallbackQuery,
+    callback_data: AccCb,
+    state: FSMContext,
+    db: Connection,
+    settings: Row,
+    callback_answer: CallbackAnswer,
+) -> None:
+    await state.clear()
+    uid, act = settings["user_id"], callback_data.act
+    if act == "list":
+        await show_accounts(callback, db, settings)
+        return
+    if act == "new":
+        await state.set_state(AccForm.name)
+        await show(
+            callback,
+            "➕ <b>Новый счёт</b>\nНапиши название, можно с эмодзи: «🏦 Депозит».",
+            kb([btn("✖ Отмена", AccCb(act="list"))]),
+        )
+        return
+    if act == "transfers":
+        transfers = await repo.recent_transfers(db, uid)
+        await show(callback, *views.transfers_view(transfers, settings["currency"], _today(settings)))
+        return
+    if act in ("tdel", "tdelok"):
+        transfer = await repo.transfer(db, uid, callback_data.id)
+        if not transfer:
+            callback_answer.text = "Перевод уже удалён"
+            await show_accounts(callback, db, settings)
+            return
+        money = fmt_money(transfer["amount"], settings["currency"])
+        route = f"{clip(transfer['from_name'])} → {clip(transfer['to_name'])}"
+        if act == "tdel":
+            await show(
+                callback,
+                f"🗑 Удалить перевод {money}: {esc(route)}? Балансы счетов пересчитаются.",
+                confirm_kb(AccCb(act="tdelok", id=transfer["id"]), AccCb(act="transfers")),
+            )
+            return
+        await repo.delete_transfer(db, transfer["id"])
+        await journal.add(db, uid, f"🗑 Удалён перевод {money}: {route}")
+        await show_accounts(callback, db, settings, "🗑 Перевод удалён")
+        return
+    if act == "transfer":
+        accounts = await repo.accounts(db, uid)
+        if len(accounts) < 2:
+            callback_answer.text = "Для перевода нужно хотя бы два счёта"
+            return
+        await show(callback, "🔁 <b>Перевод</b>\nС какого счёта?", views.transfer_pick_kb(accounts, "tfrom"))
+        return
+    account = await repo.account(db, uid, callback_data.id)
+    if not account:
+        await show(callback, "Счёт не найден.", BACK_TO_FINANCE)
+        return
+    if act == "open":
+        await show_account(callback, db, settings, account["id"])
+    elif act == "rename":
+        await state.set_state(AccForm.name)
+        await state.update_data(account_id=account["id"])
+        await show(
+            callback,
+            f"✏️ Новое название для «{esc(account['name'])}»:",
+            kb([btn("✖ Отмена", AccCb(act="open", id=account["id"]))]),
+        )
+    elif act == "start":
+        await state.set_state(AccForm.start)
+        await state.update_data(account_id=account["id"])
+        await show(
+            callback,
+            f"💼 <b>Начальный баланс «{esc(account['name'])}»</b>\n"
+            f"Сейчас: {fmt_money(account['start_balance'], settings['currency'])}\n\n"
+            "Сколько денег было на счёте до начала учёта? Напиши число (можно отрицательное).",
+            kb([btn("✖ Отмена", AccCb(act="open", id=account["id"]))]),
+        )
+    elif act == "default" and not account["archived"]:
+        await settings_repo.update(db, uid, default_account_id=account["id"])
+        await journal.add(db, uid, f"⭐ Основной счёт: {quote(account['name'])}")
+        callback_answer.text = "Теперь новые операции пишутся сюда"
+        await show_account(callback, db, await settings_repo.get(db, uid), account["id"])
+    elif act == "archive":
+        if account["id"] == settings["default_account_id"]:
+            callback_answer.text = "Основной счёт скрыть нельзя"
+            return
+        await repo.set_account_archived(db, account["id"], True)
+        await journal.add(db, uid, f"🗄 Счёт {quote(account['name'])} скрыт")
+        await show_account(callback, db, settings, account["id"])
+    elif act == "restore":
+        await repo.set_account_archived(db, account["id"], False)
+        await journal.add(db, uid, f"👁 Счёт {quote(account['name'])} снова в списке")
+        await show_account(callback, db, settings, account["id"])
+    elif act == "tfrom" and not account["archived"]:
+        accounts = await repo.accounts(db, uid)
+        text = f"🔁 <b>Перевод</b> с «{esc(account['name'])}»\nНа какой счёт?"
+        await show(callback, text, views.transfer_pick_kb(accounts, "tto", account["id"]))
+    elif act == "tto" and not account["archived"]:
+        source = await repo.account(db, uid, int(callback_data.v or 0))
+        if not source or source["archived"] or source["id"] == account["id"]:
+            callback_answer.text = "Выбери другой счёт"
+            return
+        await state.set_state(AccForm.transfer_amount)
+        await state.update_data(from_id=source["id"], to_id=account["id"])
+        await show(
+            callback,
+            f"🔁 «{esc(source['name'])}» → «{esc(account['name'])}»\nСколько переводишь? Например <code>20000</code>.",
+            kb([btn("✖ Отмена", AccCb(act="list"))]),
+        )
+
+
+@router.message(AccForm.name, F.text)
+async def got_account_name(message: Message, state: FSMContext, db: Connection, settings: Row) -> None:
+    account_id = (await state.get_data()).get("account_id")
+    await state.clear()
+    name, uid = message.text.strip()[:40], settings["user_id"]
+    if account_id:
+        old = await repo.account(db, uid, account_id)
+        if old:
+            await repo.rename_account(db, account_id, name)
+            await journal.add(db, uid, f"✏️ Счёт {quote(old['name'])} → {quote(name)}")
+        await show_account(message, db, settings, account_id)
+        return
+    account_id = await repo.add_account(db, uid, name)
+    await journal.add(db, uid, f"👛 Новый счёт {quote(name)}")
+    await show_account(message, db, settings, account_id)
+
+
+@router.message(AccForm.start, F.text)
+async def got_account_start(message: Message, state: FSMContext, db: Connection, settings: Row) -> None:
+    value = parse_amount(message.text, allow_negative=True, allow_zero=True)
+    if value is None:
+        await message.answer("Не понял сумму. Напиши число, например <code>150000</code>.")
+        return
+    account_id = (await state.get_data())["account_id"]
+    await state.clear()
+    account = await repo.account(db, settings["user_id"], account_id)
+    if account:
+        await repo.set_account_start(db, account_id, value)
+        amount = fmt_money(value, settings["currency"])
+        await journal.add(db, settings["user_id"], f"💼 Начальный баланс {quote(account['name'])}: {amount}")
+    await show_account(message, db, settings, account_id)
+
+
+@router.message(AccForm.transfer_amount, F.text)
+async def got_transfer_amount(message: Message, state: FSMContext, db: Connection, settings: Row) -> None:
+    amount = parse_amount(message.text)
+    if amount is None:
+        await message.answer("Не понял сумму. Напиши число, например <code>20000</code>.")
+        return
+    data = await state.get_data()
+    await state.clear()
+    uid = settings["user_id"]
+    source, target = await repo.account(db, uid, data["from_id"]), await repo.account(db, uid, data["to_id"])
+    if not source or not target:
+        await show(message, "Счёт не найден.", BACK_TO_FINANCE)
+        return
+    await repo.add_transfer(db, uid, source["id"], target["id"], amount, _today(settings), tu.utcnow())
+    money = fmt_money(amount, settings["currency"])
+    await journal.add(db, uid, f"🔁 Перевод {money}: {clip(source['name'])} → {clip(target['name'])}")
+    header = f"✅ 🔁 Перевод {money}: {esc(clip(source['name']))} → {esc(clip(target['name']))}"
+    await show_accounts(message, db, settings, header)
 
 
 # --- выгрузка ---

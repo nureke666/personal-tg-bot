@@ -10,7 +10,7 @@ from aiosqlite import Row
 from openpyxl import Workbook
 from openpyxl.styles import Font
 
-HEADERS = ["Дата", "Тип", "Категория", "Сумма", "Комментарий"]
+HEADERS = ["Дата", "Тип", "Категория", "Сумма", "Комментарий", "Счёт"]
 KIND_LABELS = {"expense": "Расход", "income": "Доход"}
 
 
@@ -30,6 +30,7 @@ def to_csv(ops: Sequence[Row]) -> bytes:
                 op["category"],
                 f"{_amount(op['amount']):.2f}".replace(".", ","),
                 op["comment"] or "",
+                op["account"] or "",
             ]
         )
     return buffer.getvalue().encode("utf-8-sig")
@@ -49,6 +50,7 @@ def to_xlsx(ops: Sequence[Row], currency: str) -> bytes:
                 op["category"],
                 _amount(op["amount"]),
                 op["comment"] or "",
+                op["account"] or "",
             ]
         )
         key = (KIND_LABELS[op["kind"]], op["category"])
@@ -64,7 +66,7 @@ def to_xlsx(ops: Sequence[Row], currency: str) -> bytes:
     for row in summary.iter_rows(min_row=2):
         row[2].number_format = "#,##0.00"
 
-    for ws, widths in ((sheet, [12, 10, 22, 14, 40]), (summary, [10, 22, 16])):
+    for ws, widths in ((sheet, [12, 10, 22, 14, 40, 16]), (summary, [10, 22, 16])):
         for cell in ws[1]:
             cell.font = Font(bold=True)
         for index, width in enumerate(widths):

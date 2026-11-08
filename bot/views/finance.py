@@ -3,7 +3,7 @@ from datetime import date
 
 from aiogram.types import InlineKeyboardMarkup
 
-from bot.callbacks import CatCb, FinCb, NavCb, OpCb, QuickCb
+from bot.callbacks import AccCb, CatCb, FinCb, NavCb, OpCb, PayCb, QuickCb
 from bot.keyboards.common import btn, chunks, kb, nav_row
 from bot.repo.finance import EXPENSE, INCOME
 from bot.services import reports
@@ -16,11 +16,18 @@ KIND_SIGNS = {EXPENSE: "➖", INCOME: "➕"}
 
 
 def finance_menu(
-    balance: int, income: int, expense: int, month_title: str, month_limit: int | None, currency: str
+    balance: int,
+    accounts: Sequence[tuple[str, int]],
+    income: int,
+    expense: int,
+    month_title: str,
+    month_limit: int | None,
+    currency: str,
 ) -> tuple[str, InlineKeyboardMarkup]:
-    lines = [
-        "💰 <b>Финансы</b>",
-        f"Баланс: <b>{fmt_money(balance, currency)}</b>",
+    lines = ["💰 <b>Финансы</b>", f"Баланс: <b>{fmt_money(balance, currency)}</b>"]
+    if len(accounts) > 1:
+        lines += [f"{esc(name)}: {fmt_money(amount, currency)}" for name, amount in accounts]
+    lines += [
         "",
         f"<b>{month_title}</b>",
         f"Доходы: {fmt_money(income, currency)}",
@@ -32,6 +39,8 @@ def finance_menu(
     markup = kb(
         [btn("➖ Расход", FinCb(act="add", v=EXPENSE)), btn("➕ Доход", FinCb(act="add", v=INCOME))],
         [btn("📊 Отчёт", FinCb(act="report", v="month")), btn("🧾 История", FinCb(act="history"))],
+        [btn("👛 Счета", AccCb(act="list")), btn("🔁 Перевод", AccCb(act="transfer"))],
+        [btn("📅 Регулярные платежи", PayCb(act="list"))],
         [btn("🎯 Лимиты", FinCb(act="limits")), btn("🗂 Категории", FinCb(act="cats", v=EXPENSE))],
         [btn("📤 Выгрузка в Excel/CSV", FinCb(act="export"))],
     )
@@ -71,16 +80,89 @@ def op_card(op: Mapping, currency: str, today: date, notes: Sequence[str] = ()) 
         f"🗂 {esc(op['category'])}",
         f"📅 {fmt_date(date.fromisoformat(op['op_date']), today)}",
     ]
+    if op["account"]:
+        lines.append(f"👛 {esc(op['account'])}")
     if op["comment"]:
         lines.append(f"💬 {esc(op['comment'])}")
     if notes:
         lines += ["", *notes]
     markup = kb(
         [btn("📅 Другая дата", OpCb(act="date", id=op["id"])), btn("🗂 Категория", OpCb(act="cat", id=op["id"]))],
-        [btn("🗑 Удалить", OpCb(act="del", id=op["id"]))],
+        [btn("👛 Счёт", OpCb(act="acc", id=op["id"])), btn("🗑 Удалить", OpCb(act="del", id=op["id"]))],
         [btn(f"{KIND_SIGNS[op['kind']]} Ещё", FinCb(act="add", v=op["kind"])), btn("◀ Финансы", FinCb(act="menu"))],
     )
     return "\n".join(lines), markup
+
+
+def op_account_kb(op_id: int, accounts: Sequence[Mapping]) -> InlineKeyboardMarkup:
+    rows = chunks([btn(a["name"], OpCb(act="setacc", id=op_id, v=str(a["id"]))) for a in accounts], 2)
+    rows.append([btn("◀ Назад", OpCb(act="open", id=op_id))])
+    return kb(*rows)
+
+
+# --- счета ---
+def accounts_view(
+    active: Sequence[Mapping], archived: Sequence[Mapping], balances: Mapping[int, int], default_id: int, currency: str
+) -> tuple[str, InlineKeyboardMarkup]:
+    total = sum(balances.get(a["id"], 0) for a in (*active, *archived))
+    lines = ["👛 <b>Счета</b>", f"Всего: <b>{fmt_money(total, currency)}</b>", ""]
+    lines += [
+        f"{'⭐ ' if a['id'] == default_id else ''}{esc(a['name'])}: {fmt_money(balances.get(a['id'], 0), currency)}"
+        for a in active
+    ]
+    lines += ["", "⭐ — основной: на него записываются новые операции. Счёт операции меняется в её карточке."]
+    rows = chunks([btn(a["name"], AccCb(act="open", id=a["id"])) for a in active], 2)
+    if archived:
+        rows += chunks([btn(f"🗄 {a['name']}", AccCb(act="open", id=a["id"])) for a in archived], 2)
+    rows.append([btn("➕ Новый счёт", AccCb(act="new")), btn("🔁 Перевод", AccCb(act="transfer"))])
+    rows.append([btn("🧾 Переводы", AccCb(act="transfers")), btn("◀ Финансы", FinCb(act="menu"))])
+    return "\n".join(lines), kb(*rows)
+
+
+def account_card(account: Mapping, balance: int, is_default: bool, currency: str) -> tuple[str, InlineKeyboardMarkup]:
+    hidden = bool(account["archived"])
+    lines = [
+        f"👛 <b>{esc(account['name'])}</b>" + (" ⭐ основной" if is_default else ""),
+        f"Баланс: <b>{fmt_money(balance, currency)}</b>",
+        f"Начальный баланс: {fmt_money(account['start_balance'], currency)}",
+    ]
+    if hidden:
+        lines.append("Скрыт: не показывается в списках, операции и баланс остаются.")
+    aid = account["id"]
+    toggle = btn("👁 Вернуть", AccCb(act="restore", id=aid)) if hidden else btn("🗄 Скрыть", AccCb(act="archive", id=aid))
+    return "\n".join(lines), kb(
+        [btn("✏️ Переименовать", AccCb(act="rename", id=aid)), btn("💼 Начальный баланс", AccCb(act="start", id=aid))],
+        [btn("⭐ Сделать основным", AccCb(act="default", id=aid))] if not is_default and not hidden else [],
+        [toggle] if not is_default else [],
+        [btn("◀ Счета", AccCb(act="list"))],
+    )
+
+
+def transfers_view(transfers: Sequence[Mapping], currency: str, today: date) -> tuple[str, InlineKeyboardMarkup]:
+    text = "🧾 <b>Последние переводы</b>\nНажми, чтобы удалить ошибочный." if transfers else "🧾 Переводов пока нет."
+    rows = [
+        [
+            btn(
+                clip(
+                    f"{fmt_date(date.fromisoformat(t['op_date']), today)} · {fmt_money(t['amount'], currency)} · "
+                    f"{t['from_name']} → {t['to_name']}",
+                    60,
+                ),
+                AccCb(act="tdel", id=t["id"]),
+            )
+        ]
+        for t in transfers
+    ]
+    rows.append([btn("◀ Счета", AccCb(act="list"))])
+    return text, kb(*rows)
+
+
+def transfer_pick_kb(accounts: Sequence[Mapping], act: str, from_id: int = 0) -> InlineKeyboardMarkup:
+    """Выбор счёта для перевода: act = tfrom (откуда) или tto (куда, from_id уже выбран)."""
+    choices = [a for a in accounts if a["id"] != from_id]
+    rows = chunks([btn(a["name"], AccCb(act=act, id=a["id"], v=str(from_id or ""))) for a in choices], 2)
+    rows.append([btn("✖ Отмена", AccCb(act="list"))])
+    return kb(*rows)
 
 
 def op_category_kb(op_id: int, categories: Sequence[Mapping]) -> InlineKeyboardMarkup:

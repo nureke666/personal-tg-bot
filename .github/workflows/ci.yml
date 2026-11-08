@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   check:
@@ -18,3 +19,57 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run pytest
+
+  # Прод: после зелёных проверок на main копируем код на VPS и пересобираем контейнер.
+  # .env и data/ на сервере не трогаются. Включается переменной репозитория DEPLOY=on, секреты — в README,
+  # раздел «Автодеплой».
+  deploy:
+    needs: check
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.DEPLOY == 'on'
+    runs-on: ubuntu-latest
+    concurrency: deploy
+    env:
+      TARGET: ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}
+      DIR: ${{ secrets.VPS_PATH }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Ключ SSH
+        env:
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          case "$DIR" in /?*) ;; *) echo "VPS_PATH должен быть абсолютным путём к папке бота" >&2; exit 1;; esac
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          echo "SSH=ssh -i $HOME/.ssh/id_deploy -o BatchMode=yes" >> "$GITHUB_ENV"
+      - name: Папка бота на сервере на месте
+        run: $SSH "$TARGET" "test -f '$DIR/docker-compose.yml'"
+      - name: Копирование кода
+        # Только то, из чего собирается образ. --delete — лишь внутри bot/: остальное в папке на сервере
+        # (.env, data/, Caddyfile и прочее своё) не трогаем.
+        run: |
+          rsync -az --delete -e "$SSH" bot/ "$TARGET:$DIR/bot/"
+          rsync -az -e "$SSH" Dockerfile .dockerignore docker-compose.yml pyproject.toml uv.lock "$TARGET:$DIR/"
+      - name: Бэкап базы и перезапуск
+        run: |
+          $SSH "$TARGET" bash -s -- "$DIR" <<'REMOTE'
+          set -euo pipefail
+          cd "$1"
+          # Перед обновлением (в нём могут быть миграции) — копия базы средствами SQLite, пока работает старый бот.
+          docker compose exec -T bot python -c "import sqlite3; sqlite3.connect('/app/data/bot.db').backup(sqlite3.connect('/app/data/before-deploy.db'))" \
+            && echo "Бэкап: data/before-deploy.db" || echo "Бот не запущен — бэкап пропущен"
+          docker compose up -d --build
+          for _ in $(seq 1 30); do
+            # Логи — в переменную: с pipefail «logs | grep -q» ложно падает от SIGPIPE.
+            logs=$(docker compose logs bot 2>&1 || true)
+            if [ -n "$(docker compose ps --status running -q bot)" ] && grep -q "запущен" <<<"$logs"; then
+              echo "Бот запущен"; exit 0
+            fi
+            sleep 2
+          done
+          echo "Бот не поднялся за минуту" >&2
+          docker compose logs --tail 50 bot >&2
+          exit 1
+          REMOTE

@@ -6,7 +6,7 @@ from datetime import UTC, date, datetime, time, timedelta
 import pytest
 from openpyxl import load_workbook
 
-from bot.services import export, quick, reports, streaks, summary
+from bot.services import export, quick, reports, smart_task, streaks, summary
 from bot.services import timeutil as tu
 from bot.services.texts import days, fmt_money, parse_amount, plural
 from bot.views import habits as habit_views
@@ -246,8 +246,22 @@ def test_limit_alerts_only_when_crossing():
 # --- выгрузка ---
 
 OPS = [
-    {"op_date": "2026-10-01", "kind": "income", "category": "💼 Зарплата", "amount": 50_000_000, "comment": None},
-    {"op_date": "2026-10-02", "kind": "expense", "category": "🍔 Еда", "amount": 150_050, "comment": "кофе; булка"},
+    {
+        "op_date": "2026-10-01",
+        "kind": "income",
+        "category": "💼 Зарплата",
+        "amount": 50_000_000,
+        "comment": None,
+        "account": "💳 Карта",
+    },
+    {
+        "op_date": "2026-10-02",
+        "kind": "expense",
+        "category": "🍔 Еда",
+        "amount": 150_050,
+        "comment": "кофе; булка",
+        "account": None,
+    },
 ]
 
 
@@ -255,8 +269,9 @@ def test_csv_is_excel_friendly():
     content = export.to_csv(OPS)
     assert content.startswith(b"\xef\xbb\xbf")
     text = content.decode("utf-8-sig")
-    assert text.splitlines()[0] == "Дата;Тип;Категория;Сумма;Комментарий"
-    assert '02.10.2026;Расход;🍔 Еда;1500,50;"кофе; булка"' in text
+    assert text.splitlines()[0] == "Дата;Тип;Категория;Сумма;Комментарий;Счёт"
+    assert '02.10.2026;Расход;🍔 Еда;1500,50;"кофе; булка";' in text
+    assert "01.10.2026;Доход;💼 Зарплата;500000,00;;💳 Карта" in text
 
 
 def test_xlsx_has_operations_and_summary():
@@ -343,3 +358,71 @@ def test_day_view_splits_habits_by_part_of_day():
     rows = [[button.text for button in row] for row in markup.inline_keyboard]
     # Номер 7 у пропущенной дневной; больше 5 номеров в ряд не ставим.
     assert rows == [["🌅", "✅ 1", "2", "3", "4", "5"], ["🌅", "6"], ["🌙", "8"]]
+
+
+# Воскресенье, 8 ноября 2026, 14:30 по местному времени.
+SUNDAY = datetime(2026, 11, 8, 14, 30)
+
+
+def _guess(text: str):
+    guess = smart_task.parse(text, SUNDAY)
+    return guess and (guess.title, guess.due_date, guess.due_time, guess.repeat)
+
+
+def test_smart_task_dates_and_times():
+    assert _guess("завтра в 10 позвонить маме") == ("Позвонить маме", date(2026, 11, 9), time(10, 0), "none")
+    assert _guess("в пятницу оплатить интернет") == ("Оплатить интернет", date(2026, 11, 13), None, "none")
+    assert _guess("через 2 часа выпить таблетку") == ("Выпить таблетку", date(2026, 11, 8), time(16, 30), "none")
+    assert _guess("на 15 ноября записаться к врачу") == ("Записаться к врачу", date(2026, 11, 15), None, "none")
+    assert _guess("15.11 в 10.30 встреча") == ("Встреча", date(2026, 11, 15), time(10, 30), "none")
+    assert _guess("встреча 25 декабря в 9 утра") == ("Встреча", date(2026, 12, 25), time(9, 0), "none")
+    assert _guess("в 7 вечера ужин") == ("Ужин", date(2026, 11, 8), time(19, 0), "none")
+    assert _guess("10:00 созвон") == ("Созвон", date(2026, 11, 9), time(10, 0), "none")  # 10:00 уже прошло
+    assert _guess("напомни через 30 минут проверить духовку") == (
+        "Проверить духовку",
+        date(2026, 11, 8),
+        time(15, 0),
+        "none",
+    )
+    assert _guess("1 марта сдать отчёт")[1] == date(2027, 3, 1)  # прошедшая дата — в следующем году
+    assert _guess("купить 3 мая цветы")[1] == date(2027, 5, 3)
+
+
+def test_smart_task_repeats():
+    assert _guess("каждый понедельник спортзал в 19") == ("Спортзал", date(2026, 11, 9), time(19, 0), "weekly")
+    assert _guess("по средам английский") == ("Английский", date(2026, 11, 11), None, "weekly")
+    assert _guess("каждый день зарядка") == ("Зарядка", date(2026, 11, 8), None, "daily")
+    assert _guess("по будням в 20 спортзал") == ("Спортзал", date(2026, 11, 9), time(20, 0), "weekdays")  # не в вс
+    assert _guess("каждое воскресенье в 10 уборка")[1] == date(2026, 11, 15)  # сегодняшние 10:00 прошли
+
+
+def test_smart_task_leaves_money_and_plain_text_alone():
+    for text in (
+        "купить хлеб",
+        "1500 такси",
+        "такси 1500",
+        "кофе 1.5",
+        "позвонить 15",
+        "завтра",
+        "+250000 зарплата",
+        "кофе 12.10",
+        "обед 25.10",
+        "сегодня такси 1500",
+        "продукты на завтра 5000",
+        "кино в пт 4000",
+        "обед 12:30 2500",
+        "подарок к 8 марта 5000",
+        "такси до 10:00 1500",
+        "ежемесячно интернет 5000",
+        "1500 по пт",
+    ):
+        assert smart_task.parse(text, SUNDAY) is None, text
+
+
+def test_smart_task_past_and_impossible_dates():
+    assert smart_task.parse("сегодня в 9 позвонить", SUNDAY) is None  # 9:00 уже прошло
+    assert smart_task.parse("оплатить 01.01.25", SUNDAY) is None
+    assert smart_task.parse("29 февраля поздравить", datetime(2028, 3, 1, 10, 0)) is None  # 2029 не високосный
+    assert smart_task.parse("29.02 поздравить", datetime(2028, 3, 1, 10, 0)) is None
+    assert _guess("каждый день в 9 зарядка") == ("Зарядка", date(2026, 11, 9), time(9, 0), "daily")
+    assert _guess("на 12.11 записаться к врачу") == ("Записаться к врачу", date(2026, 11, 12), None, "none")

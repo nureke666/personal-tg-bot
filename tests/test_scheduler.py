@@ -5,7 +5,7 @@ from datetime import date, timedelta
 import aiosqlite
 
 from bot import db as database
-from bot.repo import countdowns, finance, habits, settings, tasks
+from bot.repo import countdowns, finance, habits, payments, settings, tasks
 from bot.services import scheduler
 from bot.services import timeutil as tu
 from bot.services.planning import reschedule_all
@@ -244,7 +244,9 @@ async def test_finance_totals_and_balance(db, user):
 
     assert await finance.totals(db, OWNER, date(2026, 10, 1), date(2026, 10, 31)) == (50_000_000, 150_000)
     assert await finance.spent(db, OWNER, date(2026, 10, 1), date(2026, 10, 31), food["id"]) == 150_000
-    assert await finance.balance(db, OWNER, start_balance=1_000_000) == 1_000_000 + 50_000_000 - 450_000
+    card = (await finance.accounts(db, OWNER))[0]
+    await finance.set_account_start(db, card["id"], 1_000_000)
+    assert await finance.balance(db, OWNER) == 1_000_000 + 50_000_000 - 450_000
     by_cat = await finance.by_category(db, OWNER, finance.EXPENSE, None, None)
     assert [(r["name"], r["total"]) for r in by_cat] == [(food["name"], 450_000)]
 
@@ -547,3 +549,111 @@ async def test_migration_guesses_habit_part_by_reminder_time():
         ]
     finally:
         await conn.close()
+
+
+async def test_owner_hears_about_broken_scheduler_rarely(db, user, fake_bot, monkeypatch):
+    async def broken_tick(*args):
+        raise RuntimeError("база недоступна")
+
+    watchdog = scheduler.Watchdog()
+    monkeypatch.setattr(scheduler, "tick", broken_tick)
+    await scheduler.guarded_tick(fake_bot, db, NOW, OWNER, watchdog)
+    await scheduler.guarded_tick(fake_bot, db, NOW + timedelta(minutes=4), OWNER, watchdog)
+    assert fake_bot.sent == []  # пара упавших тиков — не повод писать
+
+    await scheduler.guarded_tick(fake_bot, db, NOW + timedelta(minutes=5), OWNER, watchdog)
+    await scheduler.guarded_tick(fake_bot, db, NOW + timedelta(minutes=30), OWNER, watchdog)
+    [(chat_id, text, _)] = fake_bot.sent
+    assert chat_id == OWNER and "падает уже 5 минут" in text and "RuntimeError: база недоступна" in text
+
+    monkeypatch.undo()
+    await scheduler.guarded_tick(fake_bot, db, NOW + timedelta(minutes=31), OWNER, watchdog)
+    assert fake_bot.sent[-1][1] == "✅ Планировщик снова работает."
+
+    # Новая серия падений в те же сутки — молчим; через сутки после прошлого сообщения — пишем снова.
+    monkeypatch.setattr(scheduler, "tick", broken_tick)
+    await scheduler.guarded_tick(fake_bot, db, NOW + timedelta(hours=2), OWNER, watchdog)
+    await scheduler.guarded_tick(fake_bot, db, NOW + timedelta(hours=3), OWNER, watchdog)
+    assert len(fake_bot.sent) == 2
+    await scheduler.guarded_tick(fake_bot, db, NOW + timedelta(days=1, minutes=5), OWNER, watchdog)
+    assert len(fake_bot.sent) == 3 and "падает" in fake_bot.sent[-1][1]
+
+
+async def test_short_failure_does_not_report_recovery(db, user, fake_bot, monkeypatch):
+    async def broken_tick(*args):
+        raise RuntimeError("сбой")
+
+    watchdog = scheduler.Watchdog()
+    monkeypatch.setattr(scheduler, "tick", broken_tick)
+    await scheduler.guarded_tick(fake_bot, db, NOW, OWNER, watchdog)
+    monkeypatch.undo()
+    await scheduler.guarded_tick(fake_bot, db, NOW + timedelta(minutes=1), OWNER, watchdog)
+    assert fake_bot.sent == []
+
+
+async def test_migration_moves_start_balance_into_card_account():
+    conn = await aiosqlite.connect(":memory:", isolation_level=None)
+    conn.row_factory = aiosqlite.Row
+    try:
+        for number, script in enumerate(database.MIGRATIONS[:11], start=1):
+            await conn.executescript(f"BEGIN; {script}; PRAGMA user_version = {number}; COMMIT;")
+        await conn.execute("INSERT INTO settings (user_id, tz, start_balance) VALUES (1, 'Asia/Almaty', 500000)")
+        await conn.execute("INSERT INTO categories (id, user_id, kind, name) VALUES (5, 1, 'expense', 'Еда')")
+        await conn.execute(
+            "INSERT INTO transactions (user_id, kind, amount, category_id, op_date, created_at)"
+            " VALUES (1, 'expense', 100, 5, '2026-01-01', '2026-01-01 00:00:00')"
+        )
+        await database.migrate(conn)
+        accounts = await conn.execute_fetchall("SELECT id, name, start_balance FROM accounts ORDER BY id")
+        assert [(r["name"], r["start_balance"]) for r in accounts] == [("💳 Карта", 500000), ("💵 Наличные", 0)]
+        card = accounts[0]["id"]
+        assert await database.scalar(conn, "SELECT default_account_id FROM settings") == card
+        assert await database.scalar(conn, "SELECT account_id FROM transactions") == card
+    finally:
+        await conn.close()
+
+
+async def test_payment_reminder_repeats_daily_until_answered(db, user, fake_bot):
+    food = (await finance.categories(db, OWNER, finance.EXPENSE))[0]
+    pid = await payments.create(db, OWNER, "📱 Связь", 500_000, food["id"], None, payments.MONTHLY, TODAY, TZ)
+    await scheduler.tick(fake_bot, db, NOW, OWNER)  # 08:00 — рано
+    assert fake_bot.sent == []
+    await scheduler.tick(fake_bot, db, NOW + timedelta(hours=2), OWNER)  # 10:00
+    [(chat_id, text, markup)] = fake_bot.sent
+    assert chat_id == OWNER and "📱 Связь" in text and "сегодня день оплаты" in text.lower()
+    assert "Оплачено" in str(markup)
+    await scheduler.tick(fake_bot, db, NOW + timedelta(hours=3), OWNER)
+    assert len(fake_bot.sent) == 1
+    await scheduler.tick(fake_bot, db, NOW + timedelta(days=1, hours=2), OWNER)  # назавтра снова
+    assert len(fake_bot.sent) == 2 and "Просрочен на 1 день" in fake_bot.sent[-1][1]
+    assert (await payments.get(db, OWNER, pid))["due_date"] == TODAY.isoformat()
+
+
+def test_monthly_payment_keeps_day_of_month():
+    assert payments.next_due(date(2027, 1, 31), payments.MONTHLY, 31) == date(2027, 2, 28)
+    assert payments.next_due(date(2027, 2, 28), payments.MONTHLY, 31) == date(2027, 3, 31)
+    assert payments.next_due(date(2026, 10, 17), payments.WEEKLY, None) == date(2026, 10, 24)
+    assert payments.next_due(date(2028, 2, 29), payments.YEARLY, None) == date(2029, 2, 28)
+
+
+async def test_timezone_change_does_not_repeat_sent_payment_reminder(db, user, fake_bot):
+    food = (await finance.categories(db, OWNER, finance.EXPENSE))[0]
+    pid = await payments.create(db, OWNER, "📱 Связь", 500_000, food["id"], None, payments.MONTHLY, TODAY, TZ)
+    await scheduler.tick(fake_bot, db, NOW + timedelta(hours=2), OWNER)  # 10:00 — напомнили
+    assert len(fake_bot.sent) == 1
+    noon = NOW + timedelta(hours=4)  # 12:00 по Алматы — сменил пояс на Москву (там 09:00)
+    await settings.update(db, OWNER, tz="Europe/Moscow")
+    await reschedule_all(db, OWNER, noon)
+    await scheduler.tick(fake_bot, db, noon, OWNER)
+    assert len(fake_bot.sent) == 1  # сегодня второй раз не шлём
+    # Сегодняшнее уже отправлено, а в Москве сейчас как раз 10:00 — следующее завтра в 10:00 по Москве.
+    assert (await payments.get(db, OWNER, pid))["next_run_at"] == "2026-10-18 07:00:00"
+
+
+async def test_timezone_change_keeps_future_payment_reminder_local_time(db, user):
+    food = (await finance.categories(db, OWNER, finance.EXPENSE))[0]
+    due = TODAY + timedelta(days=5)
+    pid = await payments.create(db, OWNER, "📺 Netflix", 300_000, food["id"], None, payments.MONTHLY, due, TZ)
+    await settings.update(db, OWNER, tz="Europe/Moscow")
+    await reschedule_all(db, OWNER, NOW)
+    assert (await payments.get(db, OWNER, pid))["next_run_at"] == "2026-10-22 07:00:00"

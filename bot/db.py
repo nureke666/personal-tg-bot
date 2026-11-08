@@ -201,6 +201,59 @@ MIGRATIONS = [
     DROP TABLE allowed_users;
     DROP TABLE access_requests;
     """,
+    # Состояние мастеров (bot/storage.py): переживает перезапуск. data — JSON.
+    """
+    CREATE TABLE fsm (
+        key   TEXT PRIMARY KEY,
+        state TEXT,
+        data  TEXT NOT NULL DEFAULT '{}'
+    );
+    """,
+    # Счета: у каждой операции свой счёт, переводы между счетами не попадают в доходы и расходы.
+    # Начальный баланс переезжает из настроек в счёт «Карта», на него же — все прежние операции.
+    # settings.start_balance с этой миграции не используется.
+    """
+    CREATE TABLE accounts (
+        id            INTEGER PRIMARY KEY,
+        user_id       INTEGER NOT NULL,
+        name          TEXT    NOT NULL,
+        start_balance INTEGER NOT NULL DEFAULT 0,
+        archived      INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE transfers (
+        id         INTEGER PRIMARY KEY,
+        user_id    INTEGER NOT NULL,
+        from_id    INTEGER NOT NULL REFERENCES accounts(id),
+        to_id      INTEGER NOT NULL REFERENCES accounts(id),
+        amount     INTEGER NOT NULL,
+        op_date    TEXT    NOT NULL,
+        created_at TEXT    NOT NULL
+    );
+    ALTER TABLE transactions ADD COLUMN account_id INTEGER REFERENCES accounts(id);
+    ALTER TABLE settings ADD COLUMN default_account_id INTEGER;
+    INSERT INTO accounts (user_id, name, start_balance) SELECT user_id, '💳 Карта', start_balance FROM settings;
+    INSERT INTO accounts (user_id, name) SELECT user_id, '💵 Наличные' FROM settings;
+    UPDATE settings SET default_account_id = (SELECT MIN(a.id) FROM accounts a WHERE a.user_id = settings.user_id);
+    UPDATE transactions
+        SET account_id = (SELECT s.default_account_id FROM settings s WHERE s.user_id = transactions.user_id);
+    """,
+    # Регулярные платежи (bot/repo/payments.py). due_date — ближайший неоплаченный, anchor_day — день месяца
+    # для ежемесячных (31-е в коротком месяце — последний день). next_run_at = NULL — не напоминать.
+    """
+    CREATE TABLE payments (
+        id          INTEGER PRIMARY KEY,
+        user_id     INTEGER NOT NULL,
+        title       TEXT    NOT NULL,
+        amount      INTEGER NOT NULL,
+        category_id INTEGER NOT NULL REFERENCES categories(id),
+        account_id  INTEGER REFERENCES accounts(id),
+        period      TEXT    NOT NULL,
+        anchor_day  INTEGER,
+        due_date    TEXT    NOT NULL,
+        next_run_at TEXT
+    );
+    CREATE INDEX ix_payments_due ON payments(next_run_at);
+    """,
 ]
 
 
