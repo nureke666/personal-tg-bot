@@ -16,7 +16,6 @@ KIND_SIGNS = {EXPENSE: "➖", INCOME: "➕"}
 
 
 def finance_menu(
-    balance: int,
     accounts: Sequence[tuple[str, int]],
     income: int,
     expense: int,
@@ -24,9 +23,9 @@ def finance_menu(
     month_limit: int | None,
     currency: str,
 ) -> tuple[str, InlineKeyboardMarkup]:
-    lines = ["💰 <b>Финансы</b>", f"Баланс: <b>{fmt_money(balance, currency)}</b>"]
-    if len(accounts) > 1:
-        lines += [f"{esc(name)}: {fmt_money(amount, currency)}" for name, amount in accounts]
+    # Общую сумму не показываем: у каждого счёта своя роль (карта — на траты, депозит — отложенное).
+    lines = ["💰 <b>Финансы</b>"]
+    lines += [f"{esc(name)}: <b>{fmt_money(amount, currency)}</b>" for name, amount in accounts]
     lines += [
         "",
         f"<b>{month_title}</b>",
@@ -104,8 +103,7 @@ def op_account_kb(op_id: int, accounts: Sequence[Mapping]) -> InlineKeyboardMark
 def accounts_view(
     active: Sequence[Mapping], archived: Sequence[Mapping], balances: Mapping[int, int], default_id: int, currency: str
 ) -> tuple[str, InlineKeyboardMarkup]:
-    total = sum(balances.get(a["id"], 0) for a in (*active, *archived))
-    lines = ["👛 <b>Счета</b>", f"Всего: <b>{fmt_money(total, currency)}</b>", ""]
+    lines = ["👛 <b>Счета</b>", ""]
     lines += [
         f"{'⭐ ' if a['id'] == default_id else ''}{esc(a['name'])}: {fmt_money(balances.get(a['id'], 0), currency)}"
         for a in active
