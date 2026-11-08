@@ -82,7 +82,8 @@ docker compose logs -f                        # должно быть «Бот @
 `docker compose up -d --build`, затем ждёт в логах «Бот … запущен» — иначе прогон красный. Вручную —
 Actions → CI → Run workflow.
 
-Один раз настроить (папка бота на сервере с `docker-compose.yml` и `.env` уже должна быть):
+Выключен, пока в репозитории нет переменной `DEPLOY=on` (Settings → Secrets and variables → Actions →
+Variables). Один раз настроить (папка бота на сервере с `docker-compose.yml` и `.env` уже должна быть):
 
 ```bash
 ssh-keygen -t ed25519 -N "" -f ~/.ssh/tg_bot_deploy                # ключ только для деплоя

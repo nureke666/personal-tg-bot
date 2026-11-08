@@ -21,10 +21,11 @@ jobs:
       - run: uv run pytest
 
   # Прод: после зелёных проверок на main копируем код на VPS и пересобираем контейнер.
-  # .env и data/ на сервере не трогаются. Секреты — в README, раздел «Автодеплой».
+  # .env и data/ на сервере не трогаются. Включается переменной репозитория DEPLOY=on, секреты — в README,
+  # раздел «Автодеплой».
   deploy:
     needs: check
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.DEPLOY == 'on'
     runs-on: ubuntu-latest
     concurrency: deploy
     env:
