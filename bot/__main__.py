@@ -17,7 +17,6 @@ from pydantic import ValidationError
 from bot import db as database
 from bot.config import Config
 from bot.handlers import (
-    admin,
     common,
     countdowns,
     fallback,
@@ -30,10 +29,8 @@ from bot.handlers import (
     summary,
     tasks,
 )
-from bot.middlewares.access import AccessMiddleware
-from bot.repo import access
+from bot.middlewares.owner import OwnerMiddleware
 from bot.services import scheduler
-from bot.services import timeutil as tu
 
 log = logging.getLogger("bot")
 
@@ -42,24 +39,17 @@ COMMANDS = [
     BotCommand(command="cancel", description="Отменить текущее действие"),
     BotCommand(command="help", description="Что я умею"),
 ]
-OWNER_COMMANDS = [
-    *COMMANDS,
-    BotCommand(command="users", description="Кто пользуется ботом"),
-    BotCommand(command="allow", description="Открыть доступ: /allow id"),
-    BotCommand(command="deny", description="Закрыть доступ: /deny id"),
-]
 
 
 def build_dispatcher(db: Connection, config: Config) -> Dispatcher:
     # db и config попадают в хендлеры как одноимённые аргументы.
     dp = Dispatcher(storage=MemoryStorage(), db=db, config=config)
-    dp.update.outer_middleware(AccessMiddleware(db, config.owner_id, config.default_tz))
+    dp.update.outer_middleware(OwnerMiddleware(db, config.owner_id, config.default_tz))
     dp.callback_query.middleware(CallbackAnswerMiddleware())
     # Порядок важен: меню перехватывает свои кнопки в любом состоянии, quick — текст вне мастеров,
     # fallback — всё остальное.
     dp.include_routers(
         menu.router,
-        admin.router,
         common.router,
         tasks.router,
         countdowns.router,
@@ -101,13 +91,11 @@ async def main() -> int:
         log.warning("OWNER_ID не задан: напиши боту /start, он пришлёт твой id")
     await bot.set_my_commands(COMMANDS)
     if config.owner_id is not None:
-        await access.sync_owner(db, config.owner_id, tu.utcnow())
-        try:
-            await bot.set_my_commands(OWNER_COMMANDS, scope=BotCommandScopeChat(chat_id=config.owner_id))
-        except TelegramAPIError:
-            log.warning("Не удалось показать владельцу команды доступа: он ещё не писал боту")
+        # Прежняя версия ставила владельцу /users, /allow, /deny отдельным списком — убираем его.
+        with contextlib.suppress(TelegramAPIError):
+            await bot.delete_my_commands(scope=BotCommandScopeChat(chat_id=config.owner_id))
 
-    ticker = asyncio.create_task(scheduler.run(bot, db, config.tick_seconds))
+    ticker = asyncio.create_task(scheduler.run(bot, db, config.tick_seconds, config.owner_id))
     try:
         await dp.start_polling(bot)
     finally:

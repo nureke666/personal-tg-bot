@@ -3,7 +3,7 @@ from datetime import datetime
 from aiosqlite import Connection, Row
 
 from bot.db import execute, fetchall, fetchone
-from bot.repo import access, finance
+from bot.repo import finance
 from bot.services import timeutil as tu
 
 FIELDS = {
@@ -39,8 +39,7 @@ async def ensure(db: Connection, user_id: int, tz: str, now: datetime | None = N
     values = {
         "user_id": user_id,
         "tz": tz,
-        # Утренний закреп — только владельцу; остальные включат в настройках, если захотят.
-        "morning_on": int(await access.is_owner(db, user_id)),
+        "morning_on": 1,
         **{f"{key}_next_at": next_at(key, at, tz, now) for key, at in defaults.items()},
     }
     await execute(
@@ -88,11 +87,11 @@ async def due_mornings(db: Connection, now: datetime) -> list[Row]:
     )
 
 
-async def due_backup(db: Connection, now: datetime) -> Row | None:
-    """Настройки владельца, если ему пора прислать бэкап. Остальным бэкап не положен."""
+async def due_backup(db: Connection, user_id: int, now: datetime) -> Row | None:
+    """Настройки владельца, если ему пора прислать бэкап."""
     return await fetchone(
         db,
-        "SELECT s.* FROM settings s JOIN allowed_users a ON a.user_id = s.user_id AND a.is_owner = 1"
-        " WHERE s.backup_on = 1 AND (s.backup_next_at IS NULL OR s.backup_next_at <= ?)",
-        (tu.to_db(now),),
+        "SELECT * FROM settings WHERE user_id = ? AND backup_on = 1"
+        " AND (backup_next_at IS NULL OR backup_next_at <= ?)",
+        (user_id, tu.to_db(now)),
     )

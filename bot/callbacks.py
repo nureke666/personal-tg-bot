@@ -120,9 +120,3 @@ class JournalCb(CallbackData, prefix="jr"):
 class SetCb(CallbackData, prefix="st"):
     act: str  # menu / tz / tzset / tzinput / cur / curset / balance / digest / checkin / toggle / time
     v: str = ""
-
-
-# --- доступ (только владелец) ---
-class AccessCb(CallbackData, prefix="ac"):
-    act: str  # allow / deny / reject / users
-    id: int = 0

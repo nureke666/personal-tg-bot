@@ -57,6 +57,6 @@ async def open_journal(message: Message, state: FSMContext, db: Connection, sett
 
 
 @router.message(F.text == MENU_SETTINGS)
-async def open_settings(message: Message, state: FSMContext, db: Connection, settings: Row, is_owner: bool) -> None:
+async def open_settings(message: Message, state: FSMContext, db: Connection, settings: Row) -> None:
     await state.clear()
-    await settings_handlers.open_settings(message, db, settings["user_id"], is_owner)
+    await settings_handlers.open_settings(message, db, settings["user_id"])

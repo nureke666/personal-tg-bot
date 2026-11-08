@@ -36,12 +36,7 @@ SCHEDULES = {
         "Каждую ночь без звука присылаю файл базы. Если с сервером что-то случится, из него всё восстановится.",
     ),
 }
-OWNER_ONLY = {"backup"}
 SEND_NOW = {"backup": "backupnow", "morning": "morningnow"}
-
-
-def schedule_keys(is_owner: bool) -> list[str]:
-    return [key for key in SCHEDULES if is_owner or key not in OWNER_ONLY]
 
 
 def tz_title(tz: str) -> str:
@@ -59,22 +54,21 @@ def _schedule_label(settings: Mapping, key: str) -> str:
     return f"{title}: выкл"
 
 
-def settings_view(settings: Mapping, is_owner: bool) -> tuple[str, InlineKeyboardMarkup]:
+def settings_view(settings: Mapping) -> tuple[str, InlineKeyboardMarkup]:
     currency = settings["currency"]
-    keys = schedule_keys(is_owner)
     text = "\n".join(
         [
             "⚙️ <b>Настройки</b>",
             f"🌍 Часовой пояс: {tz_title(settings['tz'])}",
             f"💱 Валюта: {currency}",
             f"💼 Начальный баланс: {fmt_money(settings['start_balance'], currency)}",
-            *[_schedule_label(settings, key) for key in keys],
+            *[_schedule_label(settings, key) for key in SCHEDULES],
         ]
     )
     markup = kb(
         [btn("🌍 Часовой пояс", SetCb(act="tz")), btn("💱 Валюта", SetCb(act="cur"))],
         [btn("💼 Начальный баланс", SetCb(act="balance"))],
-        *[[btn(_schedule_label(settings, key), SetCb(act="sched", v=key))] for key in keys],
+        *[[btn(_schedule_label(settings, key), SetCb(act="sched", v=key))] for key in SCHEDULES],
         [btn("⏳ Обратные отсчёты", CountdownCb(act="list"))],
         [btn("🎯 Лимиты", FinCb(act="limits")), btn("🗂 Категории", FinCb(act="cats", v="expense"))],
     )

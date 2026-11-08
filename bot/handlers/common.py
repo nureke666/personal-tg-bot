@@ -7,7 +7,6 @@ from aiogram.types import CallbackQuery, Message
 from aiosqlite import Row
 
 from bot.callbacks import CalCb, NavCb, TimeCb
-from bot.handlers.admin import HELP as OWNER_HELP
 from bot.handlers.ui import show
 from bot.keyboards import timepicker
 from bot.keyboards.calendar import calendar_kb
@@ -35,9 +34,9 @@ HELP = """👋 Привет! Я твой личный помощник.
 
 @router.message(CommandStart())
 @router.message(Command("help", "menu"))
-async def start(message: Message, state: FSMContext, is_owner: bool) -> None:
+async def start(message: Message, state: FSMContext) -> None:
     await state.clear()
-    await message.answer(HELP + (OWNER_HELP if is_owner else ""), reply_markup=main_menu())
+    await message.answer(HELP, reply_markup=main_menu())
 
 
 @router.message(Command("cancel"))
