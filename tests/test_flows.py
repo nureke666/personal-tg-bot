@@ -548,13 +548,13 @@ async def test_morning_list_pinned_from_settings_and_kept_in_sync(db, harness, u
     # Нажатие на самом закрепе перерисовывает только его.
     edits = len(harness.calls(EditMessageText))
     await harness.click(HabitCb(act="toggle", id=water, d=tu.pack_day(today()), f="am"), message_id=pinned)
-    assert harness.text.startswith("🌅") and harness.labels == ["🌅", "✅ 1", "2"]
+    assert harness.text.startswith("🌅") and harness.labels == ["🌅", "1", "✅ 2"]  # «Чтение» с временем выше
     assert len(harness.calls(EditMessageText)) == edits + 1
 
     # «✅ Сделано» из напоминания — закреп догоняет.
     await harness.click(HabitCb(act="mark", id=read, d=tu.pack_day(today())))
     edit = harness.calls(EditMessageText)[-1]
-    assert edit.message_id == pinned and "2. ✅ 📚 Чтение" in edit.text and "🎉 Всё выполнено" in edit.text
+    assert edit.message_id == pinned and "1. ✅ 📚 Чтение" in edit.text and "🎉 Всё выполнено" in edit.text
 
     await harness.click(SetCb(act="toggle", v="morning"))
     [unpin] = harness.calls(UnpinChatMessage)
