@@ -360,6 +360,30 @@ def test_day_view_splits_habits_by_part_of_day():
     assert rows == [["🌅", "✅ 1", "2", "3", "4", "5"], ["🌅", "6"], ["🌙", "8"]]
 
 
+def test_day_view_sorts_habits_by_time_within_part():
+    def habit(habit_id, title, remind_time, part="morning"):
+        return {
+            "id": habit_id,
+            "title": title,
+            "kind": "check",
+            "days_mask": tu.ALL_DAYS,
+            "remind_time": remind_time,
+            "part": part,
+        }
+
+    habits = [
+        habit(1, "Linux", "06:05"),
+        habit(2, "Без времени", None),
+        habit(3, "Git", "06:05"),
+        habit(4, "Английский", "18:05", "evening"),
+        habit(5, "Разминка", "06:00"),
+    ]
+    text, _ = habit_views.day_view(habits, set(), {}, TODAY, TODAY)
+    # Раньше время — выше; при равном — кто создан раньше; без времени — в конце части.
+    assert "1. ⬜ Разминка" in text and "2. ⬜ Linux" in text and "3. ⬜ Git" in text
+    assert "4. ⬜ Без времени" in text and "5. ⬜ Английский" in text
+
+
 # Воскресенье, 8 ноября 2026, 14:30 по местному времени.
 SUNDAY = datetime(2026, 11, 8, 14, 30)
 

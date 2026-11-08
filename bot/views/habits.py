@@ -40,8 +40,12 @@ def part_title(part: str) -> str:
 
 
 def by_part(habits: Sequence[Mapping]) -> list[Mapping]:
-    """Обычные привычки сверху вниз: утренние, дневные, вечерние, внутри части — по порядку создания."""
-    return sorted((h for h in habits if h["kind"] == CHECK), key=lambda h: PARTS.index(h["part"]))
+    """Обычные привычки сверху вниз: утренние, дневные, вечерние; внутри части — по времени напоминания,
+    без времени — в конце, при равном времени — по порядку создания."""
+    return sorted(
+        (h for h in habits if h["kind"] == CHECK),
+        key=lambda h: (PARTS.index(h["part"]), h["remind_time"] is None, h["remind_time"] or "", h["id"]),
+    )
 
 
 def numbers(habits: Sequence[Mapping]) -> dict[int, int]:

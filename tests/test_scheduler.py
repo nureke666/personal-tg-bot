@@ -183,14 +183,15 @@ def _labels(markup) -> list[str]:
 
 
 async def test_morning_list_is_pinned_instead_of_yesterdays(db, user, fake_bot):
-    await habits.create(db, OWNER, "💧 Вода", tu.ALL_DAYS, None, TZ, NOW)
+    # С временем — выше, без времени — по порядку создания: 1 Чтение, 2 Английский, 3 Вода.
     await habits.create(db, OWNER, "🇬🇧 Английский", tu.WEEKDAYS, None, TZ, NOW)
+    await habits.create(db, OWNER, "💧 Вода", tu.ALL_DAYS, None, TZ, NOW)
     await habits.create(db, OWNER, "📚 Чтение", tu.ALL_DAYS, "21:00", TZ, NOW)
     sunday_6am = NOW + timedelta(hours=22)  # 18-е, 06:00 по Алматы
     await scheduler.tick(fake_bot, db, sunday_6am, OWNER)
     [(_, text, markup)] = [m for m in fake_bot.sent if m[1].startswith("🌅")]
     assert text.startswith("🌅 <b>Привычки · вс, 18 окт</b>")
-    assert "1. ⬜ 💧 Вода" in text and "3. ⬜ 📚 Чтение · ⏰ 21:00" in text and "Английский" not in text
+    assert "1. ⬜ 📚 Чтение · ⏰ 21:00" in text and "3. ⬜ 💧 Вода" in text and "Английский" not in text
     # Привычка «по будням» в воскресенье пропускается, её номер не достаётся соседке.
     assert _labels(markup) == ["🌅", "1", "3"]
     [(chat_id, first_id)] = fake_bot.pinned
