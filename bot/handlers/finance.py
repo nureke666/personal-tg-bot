@@ -57,16 +57,13 @@ def _op_name(kind: str, amount: int, category: str, currency: str) -> str:
 async def open_menu(event: Message | CallbackQuery, db: Connection, settings: Row) -> None:
     uid, today = settings["user_id"], _today(settings)
     start, end = reports.month_range(today)
-    balance = await repo.balance(db, uid)
     balances = await repo.account_balances(db, uid)
     accounts = [(a["name"], balances.get(a["id"], 0)) for a in await repo.accounts(db, uid)]
     income, expense = await repo.totals(db, uid, start, end)
     month_title = f"{MONTHS[today.month - 1]} {today.year}"
     await show(
         event,
-        *views.finance_menu(
-            balance, accounts, income, expense, month_title, settings["month_limit"], settings["currency"]
-        ),
+        *views.finance_menu(accounts, income, expense, month_title, settings["month_limit"], settings["currency"]),
     )
 
 

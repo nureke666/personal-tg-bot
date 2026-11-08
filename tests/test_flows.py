@@ -204,7 +204,7 @@ async def test_expense_with_limit_warning(db, harness, user):
     assert "Записал" in harness.text and "⚠️" in harness.text and "90%" in harness.text
 
     await harness.click(FinCb(act="menu"))
-    assert "Баланс: <b>-900 ₸</b>" in harness.text
+    assert "💳 Карта: <b>-900 ₸</b>" in harness.text
 
 
 async def test_income_and_report_and_export(db, harness, user):
@@ -487,6 +487,12 @@ async def test_accounts_balances_transfer_and_default(db, harness, user):
     assert balances == {card["id"]: 10_000_000 - 150_000 - 2_000_000, cash["id"]: 2_000_000}
     assert await finance.balance(db, OWNER) == 10_000_000 - 150_000  # перевод общую сумму не меняет
     assert await finance.totals(db, OWNER, None, None) == (0, 150_000)  # и в доходы/расходы не попадает
+    # Каждый счёт со своим остатком, общей суммы нет: карта — на траты, остальное — отдельно.
+    await harness.click(FinCb(act="menu"))
+    assert "💳 Карта: <b>78 500 ₸</b>" in harness.text and "💵 Наличные: <b>20 000 ₸</b>" in harness.text
+    assert "Баланс" not in harness.text and "98 500" not in harness.text
+    await harness.click(AccCb(act="list"))
+    assert "💵 Наличные: 20 000 ₸" in harness.text and "Всего" not in harness.text
 
     await harness.click(AccCb(act="archive", id=card["id"]))
     assert harness.toasts[-1] == "Основной счёт скрыть нельзя"
