@@ -254,6 +254,32 @@ MIGRATIONS = [
     );
     CREATE INDEX ix_payments_due ON payments(next_run_at);
     """,
+    # Дубли категорий (одинаковые тип и название; набор по умолчанию создавался дважды, когда первые апдейты
+    # приходили одновременно): остаётся первая, в неё переезжают операции и платежи. Лимит — первый заданный,
+    # у видимых копий в первую очередь; скрытой категория остаётся, только если скрыты все копии.
+    # Дальше одинаковые названия не пускает уникальный индекс.
+    """
+    CREATE TEMP TABLE category_dupes AS
+        SELECT c.id, (SELECT MIN(k.id) FROM categories k
+                      WHERE k.user_id = c.user_id AND k.kind = c.kind AND k.name = c.name) AS keep_id
+        FROM categories c;
+    DELETE FROM category_dupes WHERE id = keep_id;
+    UPDATE transactions SET category_id = (SELECT keep_id FROM category_dupes d WHERE d.id = transactions.category_id)
+        WHERE category_id IN (SELECT id FROM category_dupes);
+    UPDATE payments SET category_id = (SELECT keep_id FROM category_dupes d WHERE d.id = payments.category_id)
+        WHERE category_id IN (SELECT id FROM category_dupes);
+    UPDATE categories SET
+        month_limit = (SELECT c.month_limit FROM categories c
+                       WHERE c.user_id = categories.user_id AND c.kind = categories.kind AND c.name = categories.name
+                         AND c.month_limit IS NOT NULL
+                       ORDER BY c.archived, c.id LIMIT 1),
+        archived = (SELECT MIN(c.archived) FROM categories c
+                    WHERE c.user_id = categories.user_id AND c.kind = categories.kind AND c.name = categories.name)
+        WHERE id IN (SELECT keep_id FROM category_dupes);
+    DELETE FROM categories WHERE id IN (SELECT id FROM category_dupes);
+    DROP TABLE category_dupes;
+    CREATE UNIQUE INDEX ux_categories_name ON categories(user_id, kind, name);
+    """,
 ]
 
 
