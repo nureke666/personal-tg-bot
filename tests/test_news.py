@@ -95,19 +95,19 @@ def _items(kind: str, *names: str) -> list[Item]:
 
 def test_pick_keeps_quotas_skips_repeats_and_fills_up():
     candidates = {
-        "top": _items("top", *(f"t{i}" for i in range(10))),
-        "show": [Item("show", "t0 again", "http://www.t0.dev/"), *_items("show", "s1", "s2", "s3", "s4", "s5")],
+        "top": _items("top", "t0", "t1", "t2", "t3", "t4"),
+        "show": [Item("show", "t0 again", "http://www.t0.dev/"), *_items("show", *(f"s{i}" for i in range(1, 10)))],
         "repo": [],
         "model": _items("model", "m1", "m2", "m3", "m4", "m5"),
         "release": _items("release", "r1", "r2", "r3"),
     }
     picked = news.pick(candidates, sent={news.url_key("https://t1.dev")})
-    # По квоте 6 + 4 + 0 + 4 + 2 = 16: t1 уже присылали, «t0 again» — тот же адрес. Недобор 4 —
-    # сначала остаток HN (t7–t9), потом следующий раздел (s5).
+    # По квоте 3 + 7 + 0 + 4 + 2 = 16: t1 уже присылали, «t0 again» — тот же адрес. Недобор 4 — по порядку
+    # разделов: остаток HN (t4), Show HN (s8, s9), пустой GitHub пропускается, модели (m5).
     assert [i.title for i in picked] == [
-        "t0", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9",
-        "s1", "s2", "s3", "s4", "s5",
-        "m1", "m2", "m3", "m4",
+        "t0", "t2", "t3", "t4",
+        "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9",
+        "m1", "m2", "m3", "m4", "m5",
         "r1", "r2",
     ]  # fmt: skip
 
