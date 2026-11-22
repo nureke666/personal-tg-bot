@@ -22,7 +22,8 @@ log = logging.getLogger(__name__)
 
 LIMIT = 20
 # Раздел и сколько ссылок он даёт. Недобор (источник молчит, всё уже было) добирается в этом же порядке.
-QUOTAS = {"top": 6, "show": 4, "repo": 4, "model": 4, "release": 2}
+# Топ HN бывает не про IT (наука, железо), поэтому основное место — у Show HN с новыми инструментами.
+QUOTAS = {"top": 3, "show": 7, "repo": 4, "model": 4, "release": 2}
 REPOS = ("anthropics/claude-code", "aiogram/aiogram", "astral-sh/uv", "astral-sh/ruff")
 # С запасом: история со вчерашнего вечера успевает набрать очки, а повторы всё равно отсекает news_sent.
 HN_WINDOW = timedelta(days=2)
