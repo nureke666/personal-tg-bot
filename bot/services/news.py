@@ -1,4 +1,4 @@
-"""IT-новости за день: десять ссылок с Hacker News, GitHub и Hugging Face, без пересказа.
+"""IT-новости за день: двадцать ссылок с Hacker News, GitHub и Hugging Face, без пересказа.
 
 Отбор — правилами: очки и звёзды внутри раздела, квота на каждый раздел. Что уже присылали, второй раз
 не приходит (bot/repo/news.py). Почему так, а не LLM или отдельный крон, — docs/adr/0002.
@@ -20,9 +20,9 @@ from bot.repo import news as news_repo
 
 log = logging.getLogger(__name__)
 
-LIMIT = 10
+LIMIT = 20
 # Раздел и сколько ссылок он даёт. Недобор (источник молчит, всё уже было) добирается в этом же порядке.
-QUOTAS = {"top": 3, "show": 2, "repo": 2, "model": 2, "release": 1}
+QUOTAS = {"top": 6, "show": 4, "repo": 4, "model": 4, "release": 2}
 REPOS = ("anthropics/claude-code", "aiogram/aiogram", "astral-sh/uv", "astral-sh/ruff")
 # С запасом: история со вчерашнего вечера успевает набрать очки, а повторы всё равно отсекает news_sent.
 HN_WINDOW = timedelta(days=2)

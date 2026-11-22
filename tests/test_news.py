@@ -1,6 +1,7 @@
 """Вечерние IT-новости: сбор из источников, отбор десяти ссылок, рассылка без повторов."""
 
 import asyncio
+import html
 import re
 from datetime import timedelta
 
@@ -94,15 +95,28 @@ def _items(kind: str, *names: str) -> list[Item]:
 
 def test_pick_keeps_quotas_skips_repeats_and_fills_up():
     candidates = {
-        "top": _items("top", "t1", "t2", "t3", "t4", "t5"),
-        "show": [Item("show", "t1 again", "http://www.t1.dev/"), *_items("show", "s2", "s3")],
+        "top": _items("top", *(f"t{i}" for i in range(10))),
+        "show": [Item("show", "t0 again", "http://www.t0.dev/"), *_items("show", "s1", "s2", "s3", "s4", "s5")],
         "repo": [],
-        "model": _items("model", "m1", "m2", "m3"),
-        "release": _items("release", "r1"),
+        "model": _items("model", "m1", "m2", "m3", "m4", "m5"),
+        "release": _items("release", "r1", "r2", "r3"),
     }
-    picked = news.pick(candidates, sent={news.url_key("https://t2.dev")})
-    # t2 уже присылали, «t1 again» — тот же адрес; пустой раздел добирается с HN, потом следующими.
-    assert [i.title for i in picked] == ["t1", "t3", "t4", "t5", "s2", "s3", "m1", "m2", "m3", "r1"]
+    picked = news.pick(candidates, sent={news.url_key("https://t1.dev")})
+    # По квоте 6 + 4 + 0 + 4 + 2 = 16: t1 уже присылали, «t0 again» — тот же адрес. Недобор 4 —
+    # сначала остаток HN (t7–t9), потом следующий раздел (s5).
+    assert [i.title for i in picked] == [
+        "t0", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9",
+        "s1", "s2", "s3", "s4", "s5",
+        "m1", "m2", "m3", "m4",
+        "r1", "r2",
+    ]  # fmt: skip
+
+
+def test_digest_of_longest_items_fits_into_one_message():
+    long = Item("model", "x" * 300, "https://huggingface.co/" + "y" * 200, "image-text-to-text · ♥ 999.9k")
+    text = news_views.digest_text([long] * news.LIMIT, NOW.date())
+    visible = html.unescape(re.sub(r"<[^>]+>", "", text))  # Telegram считает 4096 символов без разметки
+    assert len(visible) <= 4096
 
 
 def test_digest_text_escapes_titles_and_links():
@@ -131,7 +145,7 @@ async def test_evening_news_once_a_day_without_repeats(db, user, fake_bot, monke
     await scheduler.tick(fake_bot, db, EVENING, OWNER)
     [(chat_id, text, _)] = fake_bot.sent
     assert chat_id == OWNER and "IT за 17 октября" in text and 'href="https://first.dev"' in text
-    assert fake_bot.link_previews[-1].is_disabled  # 10 ссылок без превью первой
+    assert fake_bot.link_previews[-1].is_disabled  # 20 ссылок без превью первой
     assert (await settings.get(db, OWNER))["news_next_at"] == "2026-10-18 15:00:00"
 
     await scheduler.tick(fake_bot, db, EVENING + timedelta(hours=1), OWNER)
@@ -212,12 +226,12 @@ async def test_double_press_sends_two_different_batches(db, harness, monkeypatch
 
     async def slow(now):
         await asyncio.sleep(0.05)
-        return {"top": _items("top", *(f"n{i}" for i in range(20)))}
+        return {"top": _items("top", *(f"n{i}" for i in range(2 * news.LIMIT)))}
 
     monkeypatch.setattr(news, "fetch_candidates", slow)
     await asyncio.gather(harness.click(SetCb(act="newsnow")), harness.click(SetCb(act="newsnow")))
     first, second = [set(re.findall(r'href="([^"]+)"', m.text)) for m in harness.calls(SendMessage)]
-    assert len(first) == len(second) == 10 and not first & second
+    assert len(first) == len(second) == news.LIMIT and not first & second
 
 
 async def test_migration_turns_on_evening_news():
