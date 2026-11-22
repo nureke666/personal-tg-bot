@@ -11,15 +11,16 @@ from datetime import datetime, timedelta
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramNetworkError, TelegramRetryAfter
-from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, Message
+from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, LinkPreviewOptions, Message
 from aiosqlite import Connection
 
 from bot.repo import countdowns, habits, payments, settings, tasks
-from bot.services import backup, morning, summary
+from bot.services import backup, morning, news, summary
 from bot.services import timeutil as tu
 from bot.services.texts import clip, esc
 from bot.views import countdowns as countdown_views
 from bot.views import habits as habit_views
+from bot.views import news as news_views
 from bot.views import payments as payment_views
 from bot.views import summary as summary_views
 from bot.views import tasks as task_views
@@ -31,6 +32,9 @@ LATE_AFTER = timedelta(minutes=10)
 # Владельцу пишем, только если планировщик падает столько времени подряд, и не чаще раза в ALERT_EVERY.
 FAIL_ALERT_AFTER = timedelta(minutes=5)
 ALERT_EVERY = timedelta(days=1)
+NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
+# Telegram не принял подборку: собирать её заново каждый тик — за минуты съесть лимит GitHub без токена.
+NEWS_RETRY = timedelta(minutes=10)
 
 
 class Watchdog:
@@ -100,19 +104,22 @@ class Outbox:
         self.bot = bot
         self.owner_id = owner_id
 
-    async def send(self, chat_id: int, text: str, markup: InlineKeyboardMarkup | None = None) -> bool:
+    async def send(
+        self, chat_id: int, text: str, markup: InlineKeyboardMarkup | None = None, *, preview: bool = True
+    ) -> bool:
         """True — обработано (доставлено или повторять бессмысленно), False — повторить в следующий тик."""
-        handled, _ = await self.send_message(chat_id, text, markup)
+        handled, _ = await self.send_message(chat_id, text, markup, preview=preview)
         return handled
 
     async def send_message(
-        self, chat_id: int, text: str, markup: InlineKeyboardMarkup | None = None
+        self, chat_id: int, text: str, markup: InlineKeyboardMarkup | None = None, *, preview: bool = True
     ) -> tuple[bool, Message | None]:
-        """Как send, плюс само сообщение — None, если ничего не ушло."""
+        """Как send, плюс само сообщение — None, если ничего не ушло. preview=False — без превью ссылки."""
         sent: list[Message] = []
+        extra = {} if preview else {"link_preview_options": NO_PREVIEW}
 
         async def request() -> None:
-            sent.append(await self.bot.send_message(chat_id, text, reply_markup=markup))
+            sent.append(await self.bot.send_message(chat_id, text, reply_markup=markup, **extra))
 
         handled = await self._deliver(chat_id, request)
         return handled, sent[0] if sent else None
@@ -153,6 +160,7 @@ async def tick(bot: Bot, db: Connection, now: datetime, owner_id: int | None) ->
     await digests(out, db, now)
     await checkins(out, db, now)
     await weekly_summaries(out, db, now)
+    await news_digests(out, db, now)
     await backups(out, db, now)
 
 
@@ -279,6 +287,24 @@ async def weekly_summaries(out: Outbox, db: Connection, now: datetime) -> None:
                     continue
         next_at = settings.next_at("weekly", user["weekly_time"], tz, now)
         await settings.update(db, user["user_id"], weekly_next_at=next_at)
+
+
+async def news_digests(out: Outbox, db: Connection, now: datetime) -> None:
+    owner = await settings.due_news(db, out.owner_id, now)
+    if not owner:
+        return
+    uid, tz = owner["user_id"], owner["tz"]
+    # news_next_at = NULL бывает сразу после обновления: только планируем, без внеплановой подборки.
+    if owner["news_next_at"] is not None:
+
+        async def send(items: list[news.Item]) -> bool:
+            text = news_views.digest_text(items, tu.local_today(tz, now)) if items else news_views.EMPTY
+            return await out.send(uid, text, preview=False)
+
+        if not await news.deliver(db, now, send):
+            await settings.update(db, uid, news_next_at=tu.to_db(now + NEWS_RETRY))
+            return
+    await settings.update(db, uid, news_next_at=settings.next_at("news", owner["news_time"], tz, now))
 
 
 async def backups(out: Outbox, db: Connection, now: datetime) -> None:

@@ -23,6 +23,7 @@ from bot import db as database
 from bot.__main__ import build_dispatcher
 from bot.config import Config
 from bot.repo import settings
+from bot.services import news
 
 OWNER = 1001
 TZ = "Asia/Almaty"
@@ -39,7 +40,20 @@ async def db():
 
 @pytest.fixture
 async def user(db):
-    return await settings.ensure(db, OWNER, TZ, NOW)
+    await settings.ensure(db, OWNER, TZ, NOW)
+    # Вечерние IT-новости ходят в сеть; их тесты включают рассылку сами (tests/test_news.py).
+    await settings.update(db, OWNER, news_on=0)
+    return await settings.get(db, OWNER)
+
+
+@pytest.fixture(autouse=True)
+def offline_news(monkeypatch):
+    """Тесты не ходят в сеть: подборку новостей тест подменяет сам."""
+
+    async def offline(now):
+        raise AssertionError("Тест полез за новостями в сеть")
+
+    monkeypatch.setattr(news, "fetch_candidates", offline)
 
 
 class FakeBot:
@@ -50,10 +64,14 @@ class FakeBot:
         self.documents: list[tuple[int, Any, str | None]] = []
         self.pinned: list[tuple[int, int]] = []
         self.unpinned: list[tuple[int, int]] = []
+        self.link_previews: list[Any] = []
         self._ids = itertools.count(700)
 
-    async def send_message(self, chat_id: int, text: str, reply_markup: Any = None) -> SimpleNamespace:
+    async def send_message(
+        self, chat_id: int, text: str, reply_markup: Any = None, link_preview_options: Any = None
+    ) -> SimpleNamespace:
         self.sent.append((chat_id, text, reply_markup))
+        self.link_previews.append(link_preview_options)
         return SimpleNamespace(message_id=next(self._ids))
 
     async def pin_chat_message(self, chat_id: int, message_id: int, disable_notification: bool | None = None) -> None:
