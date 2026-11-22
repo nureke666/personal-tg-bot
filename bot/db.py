@@ -280,6 +280,17 @@ MIGRATIONS = [
     DROP TABLE category_dupes;
     CREATE UNIQUE INDEX ux_categories_name ON categories(user_id, kind, name);
     """,
+    # IT-новости по вечерам (bot/services/news.py): включены сразу, в 20:00. news_next_at = NULL — просто
+    # запланировать, без внеплановой подборки. news_sent — уже присланные ссылки (bot/services/news.py:url_key).
+    """
+    ALTER TABLE settings ADD COLUMN news_on      INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE settings ADD COLUMN news_time    TEXT    NOT NULL DEFAULT '20:00';
+    ALTER TABLE settings ADD COLUMN news_next_at TEXT;
+    CREATE TABLE news_sent (
+        url     TEXT PRIMARY KEY,
+        sent_at TEXT NOT NULL
+    );
+    """,
 ]
 
 

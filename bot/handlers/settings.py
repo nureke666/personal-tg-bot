@@ -1,7 +1,10 @@
+from contextlib import suppress
+
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, LinkPreviewOptions, Message
 from aiogram.utils.callback_answer import CallbackAnswer
 from aiosqlite import Connection, Row
 
@@ -11,9 +14,10 @@ from bot.keyboards import timepicker
 from bot.keyboards.common import btn, kb
 from bot.repo import journal
 from bot.repo import settings as repo
-from bot.services import backup, morning
+from bot.services import backup, morning, news
 from bot.services import timeutil as tu
 from bot.services.planning import reschedule_all
+from bot.views import news as news_views
 from bot.views import settings as views
 
 router = Router(name="settings")
@@ -97,6 +101,23 @@ async def settings_action(
         sent = await callback.message.answer(text, reply_markup=markup)
         await morning.replace_pin(callback.bot, db, settings, sent.message_id, today)
         callback_answer.text = "План на сегодня закреплён"
+    elif act == "newsnow":
+        # Источники отвечают до 20 секунд, а кнопка без ответа крутит часики: отвечаем сразу. Нажатие,
+        # пролежавшее в очереди, пока бот был выключен, Telegram ответить не даст — подборку всё равно шлём.
+        callback_answer.disable()
+        with suppress(TelegramBadRequest):
+            await callback.answer("Собираю новости…")
+        now = tu.utcnow()
+
+        async def send(items: list[news.Item]) -> bool:
+            if not items:
+                await callback.message.answer(news_views.EMPTY)
+                return True
+            text = news_views.digest_text(items, tu.local_today(settings["tz"], now))
+            await callback.message.answer(text, link_preview_options=LinkPreviewOptions(is_disabled=True))
+            return True
+
+        await news.deliver(db, now, send)
     elif act == "time" and value in schedules:
         await state.set_state(SettingsForm.time)
         await state.update_data(key=value)

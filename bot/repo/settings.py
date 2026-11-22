@@ -13,9 +13,10 @@ FIELDS = {
     "backup_on", "backup_time", "backup_next_at",
     "weekly_on", "weekly_time", "weekly_next_at",
     "morning_on", "morning_time", "morning_next_at", "morning_msg_id", "morning_msg_day",
+    "news_on", "news_time", "news_next_at",
 }  # fmt: skip
 # Рассылки по расписанию: у каждой есть поля {key}_on, {key}_time и {key}_next_at.
-SCHEDULES = ("morning", "digest", "checkin", "weekly", "backup")
+SCHEDULES = ("morning", "digest", "checkin", "weekly", "news", "backup")
 SUNDAY = 1 << 6
 # Итоги недели приходят по воскресеньям, остальное — каждый день.
 SCHEDULE_DAYS = {"weekly": SUNDAY}
@@ -35,7 +36,14 @@ async def ensure(db: Connection, user_id: int, tz: str, now: datetime | None = N
     if row:
         return row
     now = now or tu.utcnow()
-    defaults = {"morning": "06:00", "digest": "08:00", "checkin": "21:00", "weekly": "20:00", "backup": "03:00"}
+    defaults = {
+        "morning": "06:00",
+        "digest": "08:00",
+        "checkin": "21:00",
+        "weekly": "20:00",
+        "news": "20:00",
+        "backup": "03:00",
+    }
     values = {
         "user_id": user_id,
         "tz": tz,
@@ -94,5 +102,14 @@ async def due_backup(db: Connection, user_id: int, now: datetime) -> Row | None:
         db,
         "SELECT * FROM settings WHERE user_id = ? AND backup_on = 1"
         " AND (backup_next_at IS NULL OR backup_next_at <= ?)",
+        (user_id, tu.to_db(now)),
+    )
+
+
+async def due_news(db: Connection, user_id: int, now: datetime) -> Row | None:
+    """Настройки владельца, если ему пора прислать IT-новости."""
+    return await fetchone(
+        db,
+        "SELECT * FROM settings WHERE user_id = ? AND news_on = 1 AND (news_next_at IS NULL OR news_next_at <= ?)",
         (user_id, tu.to_db(now)),
     )

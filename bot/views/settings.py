@@ -30,12 +30,18 @@ SCHEDULES = {
         "📊 Итоги недели",
         "В воскресенье вечером присылаю итоги недели: задачи, привычки, деньги. Пустую неделю не присылаю.",
     ),
+    "news": (
+        "📰 IT-новости",
+        "Вечером присылаю 20 ссылок: самое заплюсованное на Hacker News, новые проекты из Show HN и GitHub, "
+        "модели в тренде на Hugging Face, свежие релизы claude-code, aiogram, uv и ruff. "
+        "Что уже присылал, не повторяю.",
+    ),
     "backup": (
         "💾 Бэкап базы",
         "Каждую ночь без звука присылаю файл базы. Если с сервером что-то случится, из него всё восстановится.",
     ),
 }
-SEND_NOW = {"backup": "backupnow", "morning": "morningnow"}
+SEND_NOW = {"backup": "backupnow", "morning": "morningnow", "news": "newsnow"}
 
 
 def tz_title(tz: str) -> str:
